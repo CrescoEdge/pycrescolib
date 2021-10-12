@@ -37,8 +37,8 @@ class clientlib(object):
         if self.ws_interface.connected():
             self.ws_interface.close()
 
-    def get_dataplane(self, stream_name):
-        return dataplane(self.host, self.port, stream_name)
+    def get_dataplane(self, stream_name, callback=None):
+        return dataplane(self.host, self.port, stream_name, callback)
 
     def get_logstreamer(self):
         return logstreamer(self.host, self.port)
