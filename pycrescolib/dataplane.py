@@ -1,7 +1,7 @@
 import json
 import time
-
 import websocket
+
 try:
     import thread
 except ImportError:
@@ -17,7 +17,7 @@ class dataplane(object):
         self.isActive = False
         self.message_count = 0
 
-    def on_message(self, message):
+    def on_message(self, ws, message):
 
         if(self.message_count == 0):
             json_incoming = json.loads(message)
@@ -29,13 +29,13 @@ class dataplane(object):
 
         self.message_count += 1
 
-    def on_error(self, error):
+    def on_error(self, ws, error):
         print(error)
 
-    def on_close(self):
+    def on_close(self, ws):
         print("### closed dataplane ###")
 
-    def on_open(self):
+    def on_open(self, ws):
         self.ws.send(self.stream_name)
 
         '''

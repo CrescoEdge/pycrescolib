@@ -1,6 +1,6 @@
 import json
 
-from pyclientlib.utils import compress_param, decompress_param, get_jar_info, encode_data
+from pycrescolib.utils import compress_param, decompress_param, get_jar_info, encode_data
 
 
 class agents(object):

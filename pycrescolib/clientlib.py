@@ -1,10 +1,11 @@
-from pyclientlib.admin import admin
-from pyclientlib.agents import agents
-from pyclientlib.dataplane import dataplane
-from pyclientlib.globalcontroller import globalcontroller
-from pyclientlib.logstreamer import logstreamer
-from pyclientlib.wc_interface import ws_interface
-from pyclientlib.messaging import messaging
+from pycrescolib.admin import admin
+from pycrescolib.agents import agents
+from pycrescolib.dataplane import dataplane
+from pycrescolib.globalcontroller import globalcontroller
+from pycrescolib.logstreamer import logstreamer
+from pycrescolib.messaging import messaging
+from pycrescolib.wc_interface import ws_interface
+
 
 class clientlib(object):
 

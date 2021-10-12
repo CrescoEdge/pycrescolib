@@ -1,6 +1,5 @@
 import json
 
-
 class messaging(object):
 
     def __init__(self, ws_interface):
@@ -69,7 +68,7 @@ class messaging(object):
 
         #print("Sending..")
         json_message = json.dumps(message)
-        print(json_message)
+        #print(json_message)
 
         self.ws_interface.ws.send(json_message)
 

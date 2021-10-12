@@ -1,6 +1,6 @@
 import json
 
-from pyclientlib.utils import decompress_param, get_jar_info, compress_param, encode_data
+from pycrescolib.utils import decompress_param, get_jar_info, compress_param, encode_data
 
 
 class globalcontroller(object):
