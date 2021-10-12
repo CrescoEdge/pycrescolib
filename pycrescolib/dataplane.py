@@ -28,8 +28,8 @@ class dataplane(object):
             if self.callback is not None:
                 self.callback(message)
             else:
-                print(self.stream_name + ' ' + message)
-                print(type(message))
+                print("DP Message = " + str(message))
+                print("DP Message Type = " + str(type(message)))
 
         self.message_count += 1
 

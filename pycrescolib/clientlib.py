@@ -40,8 +40,8 @@ class clientlib(object):
     def get_dataplane(self, stream_name, callback=None):
         return dataplane(self.host, self.port, stream_name, callback)
 
-    def get_logstreamer(self):
-        return logstreamer(self.host, self.port)
+    def get_logstreamer(self, callback=None):
+        return logstreamer(self.host, self.port, callback)
 
 
 

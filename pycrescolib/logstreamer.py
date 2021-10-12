@@ -8,20 +8,24 @@ except ImportError:
 
 class logstreamer(object):
 
-    def __init__(self, host, port):
+    def __init__(self, host, port, callback):
         self.host = host
         self.port = port
         self.ws = None
         self.isActive = False
         self.message_count = 0
+        self.callback = callback
 
-    def on_message(self, message):
+    def on_message(self, ws, message):
 
         if(self.message_count == 0):
             print(message)
             self.isActive = True
         else:
-            print('w ' + message)
+            if self.callback is not None:
+                self.callback(message)
+            else:
+                print("Log Message = " + str(message))
 
         self.message_count += 1
 
@@ -38,16 +42,16 @@ class logstreamer(object):
 
         '''
         #message = 'global-region,global-controller,io.cresco,Trace'
-        message = dst_region + ',' + dst_agent + ',Trace,default'
+        message = dst_region + ',' + dst_agent + ',Info,default'
         self.ws.send(message)
 
-    def on_error(self, error):
+    def on_error(self, ws, error):
         print(error)
 
-    def on_close(self):
+    def on_close(self, ws):
         print("### closed logstreamer ###")
 
-    def on_open(self):
+    def on_open(self, ws):
         #self.ws.send(self.stream_name)
 
         '''
