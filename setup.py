@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='pycrescolib',
-    version='0.9',
+    version='0.10',
     packages=['pycrescolib'],
     url='http://cresco.io',
     license='Apache 2.0',

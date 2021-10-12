@@ -8,6 +8,28 @@ class globalcontroller(object):
     def __init__(self, messaging):
         self.messaging = messaging
 
+    def submit_pipeline(self, cadl):
+
+        message_event_type = 'CONFIG'
+        message_payload = dict()
+        message_payload['action'] = 'gpipelinesubmit'
+        message_payload['action_gpipeline'] = compress_param(json.dumps(cadl))
+        message_payload['action_tenantid'] = '0'
+
+        retry = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+        # returns status and gpipeline_id
+        return retry
+
+    def remove_pipeline(self, pipeline_id):
+
+        message_event_type = 'CONFIG'
+        message_payload = dict()
+        message_payload['action'] = 'gpipelineremove'
+        message_payload['action_pipelineid'] = pipeline_id
+        retry = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+
+        return retry
+
     def get_pipeline_list(self):
 
         message_event_type = 'EXEC'
@@ -93,7 +115,6 @@ class globalcontroller(object):
         for i in range(10):
             result = self.messaging.global_plugin_msgevent(True, message_event_type, message_payload, plugin['region'], plugin['agent'], plugin['name'])
             print(result)
-
 
     def upload_plugin_global(self, jar_file_path):
 
