@@ -1,5 +1,5 @@
 import time
-
+import json
 import websocket
 try:
     import thread
@@ -18,9 +18,10 @@ class logstreamer(object):
 
     def on_message(self, ws, message):
 
-        if(self.message_count == 0):
-            print(message)
-            self.isActive = True
+        if (self.message_count == 0):
+            json_incoming = json.loads(message)
+            if int(json_incoming['status_code']) == 10:
+                self.isActive = True
         else:
             if self.callback is not None:
                 self.callback(message)
@@ -43,6 +44,8 @@ class logstreamer(object):
         '''
         #message = 'global-region,global-controller,io.cresco,Trace'
         message = dst_region + ',' + dst_agent + ',Info,default'
+        #message = dst_region + ',' + dst_agent + ',Trace,default'
+
         self.ws.send(message)
 
     def on_error(self, ws, error):
