@@ -1,3 +1,4 @@
+import ssl
 import time
 import json
 import websocket
@@ -43,8 +44,8 @@ class logstreamer(object):
 
         '''
         #message = 'global-region,global-controller,io.cresco,Trace'
-        message = dst_region + ',' + dst_agent + ',Info,default'
-        #message = dst_region + ',' + dst_agent + ',Trace,default'
+        #message = dst_region + ',' + dst_agent + ',Info,default'
+        message = dst_region + ',' + dst_agent + ',Trace,default'
 
         self.ws.send(message)
 
@@ -83,14 +84,17 @@ class logstreamer(object):
     def connect(self):
 
         def run(*args):
-            ws_url = 'ws://' + self.host + ':' + str(self.port) + '/api/logstreamer'
+            ws_url = 'wss://' + self.host + ':' + str(self.port) + '/api/logstreamer'
             websocket.enableTrace(False)
             self.ws = websocket.WebSocketApp(ws_url,
                                              on_message=self.on_message,
                                              on_error=self.on_error,
-                                             on_close=self.on_close)
+                                             on_close=self.on_close,
+                                             #sslopt = {"cert_reqs": ssl.CERT_NONE},
+                                             header={'cresco_service_key': 'abc-8675309'}
+                                             )
             self.ws.on_open = self.on_open
-            self.ws.run_forever()
+            self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
 
         thread.start_new_thread(run, ())
 

@@ -140,7 +140,6 @@ class globalcontroller(object):
         message_payload['configparams'] = compress_param(json.dumps(configparams))
         message_payload['jardata'] = encode_data(jar_data)
 
-
         reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
 
         # returns reply with status and pluginid

@@ -1,3 +1,5 @@
+import traceback
+
 from pycrescolib.admin import admin
 from pycrescolib.agents import agents
 from pycrescolib.dataplane import dataplane
@@ -5,7 +7,16 @@ from pycrescolib.globalcontroller import globalcontroller
 from pycrescolib.logstreamer import logstreamer
 from pycrescolib.messaging import messaging
 from pycrescolib.wc_interface import ws_interface
+import ssl
 
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    # Legacy Python that doesn't verify HTTPS certificates by default
+    pass
+else:
+    # Handle target environment that doesn't support HTTPS verification
+    ssl._create_default_https_context = _create_unverified_https_context
 
 class clientlib(object):
 
@@ -21,10 +32,11 @@ class clientlib(object):
 
     def connect(self):
         try:
-            ws_url = 'ws://' + self.host + ':' + str(self.port) +'/api/apisocket'
+            ws_url = 'wss://' + self.host + ':' + str(self.port) +'/api/apisocket'
             isWSConnected = self.ws_interface.connect(ws_url)
             return isWSConnected
         except:
+            traceback.print_exc()
             return False
 
     def connected(self):
