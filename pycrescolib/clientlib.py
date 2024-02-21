@@ -33,7 +33,7 @@ class clientlib(object):
     def connect(self):
         try:
             ws_url = 'wss://' + self.host + ':' + str(self.port) +'/api/apisocket'
-            isWSConnected = self.ws_interface.connect(ws_url)
+            isWSConnected = self.ws_interface.connect(ws_url, self.service_key)
             return isWSConnected
         except:
             traceback.print_exc()
