@@ -50,10 +50,10 @@ class clientlib(object):
             self.ws_interface.close()
 
     def get_dataplane(self, stream_name, callback=None):
-        return dataplane(self.host, self.port, stream_name, callback)
+        return dataplane(self.host, self.port, stream_name, callback, self.service_key)
 
     def get_logstreamer(self, callback=None):
-        return logstreamer(self.host, self.port, callback)
+        return logstreamer(self.host, self.port, callback, self.service_key)
 
 
 
