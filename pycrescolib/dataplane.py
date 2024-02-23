@@ -10,7 +10,7 @@ except ImportError:
 
 class dataplane(object):
 
-    def __init__(self, host, port, stream_name, callback):
+    def __init__(self, host, port, stream_name, callback, cresco_service_key):
         self.host = host
         self.port = port
         self.stream_name = stream_name
@@ -18,6 +18,7 @@ class dataplane(object):
         self.isActive = False
         self.message_count = 0
         self.callback = callback
+        self.cresco_service_key = cresco_service_key
 
     def is_active(self):
         return self.isActive
@@ -77,7 +78,7 @@ class dataplane(object):
                                              on_error=self.on_error,
                                              on_close=self.on_close,
                                              #sslopt={"cert_reqs": ssl.CERT_NONE},
-                                             header={'cresco_service_key': 'abc-8675309'}
+                                             header={'cresco_service_key': self.cresco_service_key}
                                              )
             self.ws.on_open = self.on_open
             self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})

@@ -9,13 +9,14 @@ except ImportError:
 
 class logstreamer(object):
 
-    def __init__(self, host, port, callback):
+    def __init__(self, host, port, callback, service_key):
         self.host = host
         self.port = port
         self.ws = None
         self.isActive = False
         self.message_count = 0
         self.callback = callback
+        self.service_key = service_key
 
     def on_message(self, ws, message):
 
@@ -91,7 +92,7 @@ class logstreamer(object):
                                              on_error=self.on_error,
                                              on_close=self.on_close,
                                              #sslopt = {"cert_reqs": ssl.CERT_NONE},
-                                             header={'cresco_service_key': 'abc-8675309'}
+                                             header={'cresco_service_key': self.service_key}
                                              )
             self.ws.on_open = self.on_open
             self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
