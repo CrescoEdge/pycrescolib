@@ -1,171 +1,299 @@
+"""
+Global controller module for interacting with Cresco global controller.
+"""
 import json
+import logging
+from typing import Dict, Any, List, Optional, Union
 
-from pycrescolib.utils import decompress_param, get_jar_info, compress_param, encode_data
+from .base_classes import CrescoMessageBase
+from .utils import decompress_param, get_jar_info, compress_param, encode_data, json_serialize, json_deserialize, read_file_bytes
 
+# Setup logging
+logger = logging.getLogger(__name__)
 
-class globalcontroller(object):
+class globalcontroller(CrescoMessageBase):
+    """Global controller class for Cresco operations."""
 
     def __init__(self, messaging):
-        self.messaging = messaging
+        """Initialize with messaging interface.
 
-    def submit_pipeline(self, cadl):
+        Args:
+            messaging: Messaging interface
+        """
+        super().__init__(messaging)
 
-        message_event_type = 'CONFIG'
-        message_payload = dict()
-        message_payload['action'] = 'gpipelinesubmit'
-        message_payload['action_gpipeline'] = compress_param(json.dumps(cadl))
-        message_payload['action_tenantid'] = '0'
+    def submit_pipeline(self, cadl: Dict[str, Any], tenant_id: str = '0') -> Dict[str, Any]:
+        """Submit a pipeline.
 
-        retry = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
-        # returns status and gpipeline_id
-        return retry
+        Args:
+            cadl: Pipeline configuration in CADL format
+            tenant_id: Tenant ID (default: '0')
 
-    def remove_pipeline(self, pipeline_id):
+        Returns:
+            Response containing status and pipeline ID
+        """
+        try:
+            message_event_type = 'CONFIG'
+            message_payload = {
+                'action': 'gpipelinesubmit',
+                'action_gpipeline': compress_param(json_serialize(cadl)),
+                'action_tenantid': tenant_id
+            }
 
-        message_event_type = 'CONFIG'
-        message_payload = dict()
-        message_payload['action'] = 'gpipelineremove'
-        message_payload['action_pipelineid'] = pipeline_id
-        retry = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+            logger.info(f"Submitting pipeline for tenant {tenant_id}")
+            retry = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+            return retry
+        except Exception as e:
+            logger.error(f"Error submitting pipeline: {e}")
+            raise
 
-        return retry
+    def remove_pipeline(self, pipeline_id: str) -> Dict[str, Any]:
+        """Remove a pipeline.
 
-    def get_pipeline_list(self):
+        Args:
+            pipeline_id: Pipeline ID to remove
 
-        message_event_type = 'EXEC'
-        message_payload = dict()
-        message_payload['action'] = 'getgpipelinestatus'
+        Returns:
+            Response containing status
+        """
+        try:
+            message_event_type = 'CONFIG'
+            message_payload = {
+                'action': 'gpipelineremove',
+                'action_pipelineid': pipeline_id
+            }
 
-        reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
-        reply = json.loads(decompress_param(reply['pipelineinfo']))['pipelines']
+            logger.info(f"Removing pipeline {pipeline_id}")
+            retry = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+            return retry
+        except Exception as e:
+            logger.error(f"Error removing pipeline: {e}")
+            raise
 
-        return reply
+    def get_pipeline_list(self) -> List[Dict[str, Any]]:
+        """Get a list of pipelines.
 
-    def get_pipeline_info(self, pipeline_id):
+        Returns:
+            List of pipelines
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {'action': 'getgpipelinestatus'}
 
-        message_event_type = 'EXEC'
-        message_payload = dict()
-        message_payload['action'] = 'getgpipeline'
-        message_payload['action_pipelineid'] = pipeline_id
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
 
-        reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
-        reply = json.loads(decompress_param(reply['gpipeline']))
+            if 'pipelineinfo' in reply:
+                pipeline_info = json_deserialize(decompress_param(reply['pipelineinfo']))
+                return pipeline_info.get('pipelines', [])
+            return []
+        except Exception as e:
+            logger.error(f"Error getting pipeline list: {e}")
+            return []
 
-        return reply
+    def get_pipeline_info(self, pipeline_id: str) -> Dict[str, Any]:
+        """Get pipeline information.
 
-    def get_pipeline_status(self, pipeline_id):
+        Args:
+            pipeline_id: Pipeline ID
 
-        reply = self.get_pipeline_info(pipeline_id)
-        status_code = int(reply['status_code'])
-        return status_code
+        Returns:
+            Pipeline information
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {
+                'action': 'getgpipeline',
+                'action_pipelineid': pipeline_id
+            }
 
-    def get_agent_list(self, dst_region=None):
+            logger.debug(f"Getting info for pipeline {pipeline_id}")
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
 
-        message_event_type = 'EXEC'
-        message_payload = dict()
-        message_payload['action'] = 'listagents'
-        if dst_region is not None:
-            message_payload['action_region'] = dst_region
+            if 'gpipeline' in reply:
+                return json_deserialize(decompress_param(reply['gpipeline']))
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting pipeline info: {e}")
+            return {}
 
-        reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+    def get_pipeline_status(self, pipeline_id: str) -> int:
+        """Get pipeline status.
 
-        reply = json.loads(decompress_param(reply['agentslist']))['agents']
+        Args:
+            pipeline_id: Pipeline ID
 
-        '''
-        for agent in reply:
-            dst_agent = agent['name']
-            dst_region = agent['region']
-            r = self.get_agent_resources(dst_region,dst_agent)
-            print(r)
-        '''
+        Returns:
+            Status code
+        """
+        try:
+            reply = self.get_pipeline_info(pipeline_id)
+            return int(reply.get('status_code', -1))
+        except Exception as e:
+            logger.error(f"Error getting pipeline status: {e}")
+            return -1
 
-        return reply
+    def get_agent_list(self, dst_region: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get a list of agents.
 
-    def get_agent_resources(self, dst_region, dst_agent):
+        Args:
+            dst_region: Optional destination region filter
 
-        message_event_type = 'EXEC'
-        message_payload = dict()
-        message_payload['action'] = 'resourceinfo'
-        message_payload['action_region'] = dst_region
-        message_payload['action_agent'] = dst_agent
+        Returns:
+            List of agents
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {'action': 'listagents'}
 
-        reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+            if dst_region is not None:
+                message_payload['action_region'] = dst_region
 
-        reply = json.loads(json.loads(decompress_param(reply['resourceinfo']))['agentresourceinfo'][0]['perf'])
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
 
-        return reply
+            if 'agentslist' in reply:
+                agent_list = json_deserialize(decompress_param(reply['agentslist']))
+                return agent_list.get('agents', [])
+            return []
+        except Exception as e:
+            logger.error(f"Error getting agent list: {e}")
+            return []
 
-    def get_plugin_list(self):
-        # this code makes use of a global message to find a specific plugin type, then send a message to that plugin
-        message_event_type = 'EXEC'
-        message_payload = dict()
-        message_payload['action'] = 'listplugins'
+    def get_agent_resources(self, dst_region: str, dst_agent: str) -> Dict[str, Any]:
+        """Get agent resources.
 
-        result = self.messaging.global_controller_msgevent(message_event_type, message_payload)
+        Args:
+            dst_region: Destination region
+            dst_agent: Destination agent
 
-        pluginslist = json.loads(decompress_param(result['pluginslist']))
+        Returns:
+            Agent resources
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {
+                'action': 'resourceinfo',
+                'action_region': dst_region,
+                'action_agent': dst_agent
+            }
 
-        plugin_name = 'io.cresco.repo'
-        pluginlist = pluginslist['plugins']
-        for plugin in pluginlist:
-            if plugin['pluginname'] == plugin_name:
-                break;
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
 
-        message_payload['action'] = 'repolist'
-        for i in range(10):
-            result = self.messaging.global_plugin_msgevent(True, message_event_type, message_payload, plugin['region'], plugin['agent'], plugin['name'])
-            print(result)
+            if 'resourceinfo' in reply:
+                resource_info = json_deserialize(decompress_param(reply['resourceinfo']))
+                agent_resource_info = resource_info.get('agentresourceinfo', [])
 
-    def upload_plugin_global(self, jar_file_path):
+                if agent_resource_info and 'perf' in agent_resource_info[0]:
+                    return json_deserialize(agent_resource_info[0]['perf'])
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting agent resources: {e}")
+            return {}
 
-        #get data from jar
-        configparams = get_jar_info(jar_file_path)
+    def get_plugin_list(self) -> None:
+        """Get a list of plugins.
 
-        # "configparams"
-        '''
-        configparams = dict()
-        configparams['pluginname'] = 'io.cresco.cepdemo'
-        configparams['version'] = '1.0.0.SNAPSHOT-2020-09-01T203900Z'
-        configparams['md5'] = '34de550afdac3bcabbbac99ea5a1519c'
-        '''
+        Note: This method is incomplete in the original code.
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {'action': 'listplugins'}
 
-        #read input file
-        in_file = open(jar_file_path, "rb")  # opening for [r]eading as [b]inary
-        jar_data = in_file.read()  # if you only wanted to read 512 bytes, do .read(512)
-        in_file.close()
+            result = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
 
-        message_event_type = 'CONFIG'
-        message_payload = dict()
-        message_payload['action'] = 'savetorepo'
-        message_payload['configparams'] = compress_param(json.dumps(configparams))
-        message_payload['jardata'] = encode_data(jar_data)
+            if 'pluginslist' in result:
+                plugins_list = json_deserialize(decompress_param(result['pluginslist']))
+                plugin_name = 'io.cresco.repo'
+                plugin_list = plugins_list.get('plugins', [])
 
-        reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+                for plugin in plugin_list:
+                    if plugin.get('pluginname') == plugin_name:
+                        message_payload = {'action': 'repolist'}
 
-        # returns reply with status and pluginid
-        return reply
+                        for i in range(10):
+                            result = self.messaging.global_plugin_msgevent(
+                                True,
+                                message_event_type,
+                                message_payload,
+                                plugin['region'],
+                                plugin['agent'],
+                                plugin['name']
+                            )
+                            logger.debug(f"Plugin list result: {result}")
+                        break
+        except Exception as e:
+            logger.error(f"Error getting plugin list: {e}")
 
-    def get_region_resources(self, dst_region):
+    def upload_plugin_global(self, jar_file_path: str) -> Dict[str, Any]:
+        """Upload a plugin to the global repository.
 
-        message_event_type = 'EXEC'
-        message_payload = dict()
-        message_payload['action'] = 'resourceinfo'
-        message_payload['action_region'] = dst_region
+        Args:
+            jar_file_path: Path to JAR file
 
-        reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+        Returns:
+            Response containing status
+        """
+        try:
+            # Get data from jar
+            configparams = get_jar_info(jar_file_path)
 
-        #reply = json.loads(json.loads(decompress_param(reply['resourceinfo']))['agentresourceinfo'][0]['perf'])
-        reply = json.loads(decompress_param(reply['resourceinfo']))
+            # Read jar data
+            jar_data = read_file_bytes(jar_file_path)
 
-        return reply
+            message_event_type = 'CONFIG'
+            message_payload = {
+                'action': 'savetorepo',
+                'configparams': compress_param(json_serialize(configparams)),
+                'jardata': encode_data(jar_data)
+            }
 
-    def get_region_list(self):
+            logger.info(f"Uploading plugin {configparams.get('pluginname')} to global repository")
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+            return reply
+        except Exception as e:
+            logger.error(f"Error uploading plugin to global: {e}")
+            raise
 
-        message_event_type = 'EXEC'
-        message_payload = dict()
-        message_payload['action'] = 'listregions'
+    def get_region_resources(self, dst_region: str) -> Dict[str, Any]:
+        """Get region resources.
 
-        reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
-        reply = json.loads(decompress_param(reply['regionslist']))['regions']
+        Args:
+            dst_region: Destination region
 
-        return reply
+        Returns:
+            Region resources
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {
+                'action': 'resourceinfo',
+                'action_region': dst_region
+            }
+
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+
+            if 'resourceinfo' in reply:
+                return json_deserialize(decompress_param(reply['resourceinfo']))
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting region resources: {e}")
+            return {}
+
+    def get_region_list(self) -> List[Dict[str, Any]]:
+        """Get a list of regions.
+
+        Returns:
+            List of regions
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {'action': 'listregions'}
+
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+
+            if 'regionslist' in reply:
+                regions_list = json_deserialize(decompress_param(reply['regionslist']))
+                return regions_list.get('regions', [])
+            return []
+        except Exception as e:
+            logger.error(f"Error getting region list: {e}")
+            return []
