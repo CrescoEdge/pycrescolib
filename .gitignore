@@ -1,4 +1,7 @@
 # Project exclude paths
 /venv/
 /dist/
-/pycrescolib.egg-info/__pycache__/
+/build/
+*.egg-info/
+__pycache__/
+*.pyc

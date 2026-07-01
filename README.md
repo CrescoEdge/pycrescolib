@@ -8,7 +8,8 @@ data plane, and build stunnel tunnels.
 Part of the Cresco framework — see the **[agent repository](https://github.com/CrescoEdge/agent)** for the full
 architecture and the [Java client](https://github.com/CrescoEdge/clientlib) for the equivalent in Java.
 
-**Install:** `pip install .` (Python 3.8+; depends on `websockets`, `cryptography`, `backoff`).
+**Install:** `pip install pycrescolib` (Python 3.8+; depends on `websockets`, `cryptography`, `backoff`).
+From a source checkout use `pip install .`, and to build the distributions run `python -m build`.
 
 ---
 
