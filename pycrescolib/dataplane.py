@@ -52,6 +52,12 @@ class dataplane:
                 if self.ws:
                     try:
                         message = await self.ws.recv()
+                        # Defensive copy: with compression disabled, websockets can hand back a
+                        # bytearray/memoryview backed by a reusable read buffer. Because we dispatch
+                        # the callback via run_in_executor (i.e. later), the buffer can be recycled
+                        # under us and the payload seen by the callback is corrupted. Snapshot it.
+                        if isinstance(message, (bytearray, memoryview)):
+                            message = bytes(message)
                         logger.debug(f"Raw dataplane message received, type: {type(message)}")
 
                         # Handle activation message
@@ -145,11 +151,14 @@ class dataplane:
             # Headers for authentication
             headers = {'cresco_service_key': self._service_key}
 
-            # Connect
+            # Connect. compression=None disables permessage-deflate: the dataplane carries
+            # mostly binary/incompressible payloads, and per-message deflate is a large CPU cost
+            # on both ends that caps throughput (it was the dominant dataplane bottleneck).
             self.ws = await websockets.connect(
                 ws_url,
                 ssl=ssl_context,
-                additional_headers=headers
+                additional_headers=headers,
+                compression=None
             )
 
             # Send stream name
