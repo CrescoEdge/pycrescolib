@@ -6,6 +6,7 @@ import ssl
 import warnings
 
 from cryptography import x509
+from cryptography.x509.oid import NameOID
 
 import logging
 import json
@@ -166,13 +167,16 @@ class ws_interface:
                 # Get server certificate
                 pem_data = ssl.get_server_certificate(server_address)
                 cert = x509.load_pem_x509_certificate(str.encode(pem_data))
-                # Suppress all warnings from the 'cryptography' module
-                ident_string = cert.subject.rfc4514_string().replace('CN=', '').split('_')
 
-                # Set identity values
-                self.region = ident_string[0]
-                self.agent = ident_string[1]
-                self.plugin = ident_string[2]
+                # Identity is carried in three separate DN attributes so each stays within the
+                # X.509 64-char limit: O=region, OU=agent, CN=plugin.
+                def _dn_attr(oid):
+                    values = cert.subject.get_attributes_for_oid(oid)
+                    return values[0].value if values else None
+
+                self.region = _dn_attr(NameOID.ORGANIZATION_NAME)
+                self.agent = _dn_attr(NameOID.ORGANIZATIONAL_UNIT_NAME)
+                self.plugin = _dn_attr(NameOID.COMMON_NAME)
 
                 logger.info(
                     f"Extracted identity from certificate: region={self.region}, agent={self.agent}, plugin={self.plugin}")
