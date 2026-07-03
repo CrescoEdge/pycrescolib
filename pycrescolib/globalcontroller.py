@@ -295,6 +295,46 @@ class globalcontroller(CrescoMessageBase):
             logger.error(f"Error getting metric inventory: {e}")
             return {}
 
+    def get_capability_inventory(self, scope: str = 'global', dst_region: str = None, dst_agent: str = None,
+                                 include_plugins: bool = True, include_osgi: bool = False,
+                                 timeout: float = 45.0) -> Dict[str, Any]:
+        """Pull the fabric's self-describing capability inventory (LLM tool catalog).
+
+        Aggregates each node's controller-tier actions (agent/regional/global), every plugin's message
+        actions (via getcapabilities), and optionally the OSGi service/package surface. Every action is a
+        descriptor with an LLM-facing summary/why/params and a cresco_binding for invocation.
+
+        Args:
+            scope: 'node', 'region', or 'global' (mesh fan-out).
+            dst_region/dst_agent: if both set, target that agent's controller directly (node scope).
+            include_plugins: include each node's plugin capability docs (default True).
+            include_osgi: include each node's OSGi Export-Package + registered service interfaces.
+            timeout: RPC timeout in seconds (whole-mesh fan-out defaults high).
+
+        Returns:
+            The capability inventory as a dict (capabilities_by_source + optional osgi + children), or {}.
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {
+                'action': 'getcapabilityinventory',
+                'action_scope': scope if scope else 'node',
+                'action_include_plugins': str(include_plugins).lower(),
+                'action_include_osgi': str(include_osgi).lower(),
+            }
+            if dst_region is not None and dst_agent is not None:
+                reply = self.messaging.global_agent_msgevent(True, message_event_type, message_payload,
+                                                             dst_region, dst_agent, timeout)
+            else:
+                reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload,
+                                                                  timeout)
+            if reply and 'capabilityinventory' in reply:
+                return json_deserialize(reply['capabilityinventory'])
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting capability inventory: {e}")
+            return {}
+
     def get_plugin_repo_list(self) -> Dict[str, Any]:
         """Get the list of plugins available in the repositories.
 
