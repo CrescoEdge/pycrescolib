@@ -199,6 +199,45 @@ class logstreamer:
             logger.error(f"Error updating log config: {e}")
             self.isActive = False
 
+    async def send_async(self, message: str):
+        """Send a message over the log stream asynchronously.
+
+        Args:
+            message: Message to send
+        """
+        if not self.ws:
+            logger.warning("Log streamer not connected, cannot send")
+            return
+
+        try:
+            async with self._lock:
+                await self.ws.send(message)
+                logger.debug(f"Sent log stream message: {message[:100]}...")
+        except Exception as e:
+            logger.error(f"Error sending log stream message: {e}")
+            self.isActive = False
+
+    def send(self, message: str):
+        """Send a message over the log stream synchronously.
+
+        Args:
+            message: Message to send
+        """
+        future = asyncio.run_coroutine_threadsafe(self.send_async(message), self._event_loop)
+        try:
+            future.result(timeout=5)
+        except Exception as e:
+            logger.error(f"Error sending log stream message: {e}")
+            self.isActive = False
+
+    def connected(self) -> bool:
+        """Check if the log streamer is connected.
+
+        Returns:
+            True if connected, False otherwise
+        """
+        return self.isActive
+
     def connect(self):
         """Connect to the log streamer."""
 

@@ -567,6 +567,117 @@ class messaging_sync(messaging):
                 self._failed_connection = True
                 return {} if is_rpc else None
 
+    def _sync_dispatch(self, message_type, message_event_type, message_payload, is_rpc, timeout, **extra_info):
+        """Shared synchronous send path for the *_msgevent wrappers.
+
+        Builds the standard message envelope (message_info + message_payload), sends it via the
+        WebSocket interface (direct RPC when is_rpc, async fire-and-forget otherwise), and returns
+        the decoded response dict for RPC calls or None for non-RPC calls. extra_info carries the
+        routing fields (dst_region/dst_agent/dst_plugin) specific to each variant.
+        """
+        if self._failed_connection:
+            logger.warning("Not attempting to send message due to known connection failure")
+            return {} if is_rpc else None
+
+        with self._operation_lock:  # Thread safety
+            try:
+                message_info = {
+                    'message_type': message_type,
+                    'message_event_type': message_event_type,
+                    'is_rpc': is_rpc
+                }
+                message_info.update(extra_info)
+
+                message = {
+                    'message_info': message_info,
+                    'message_payload': message_payload
+                }
+                json_message = json.dumps(message)
+
+                logger.info(f"Sending {message_type}/{message_event_type} (RPC: {is_rpc})")
+                if 'action' in message_payload:
+                    logger.info(f"Action: {message_payload['action']}")
+
+                if is_rpc:
+                    try:
+                        response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
+                    except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
+                        self._failed_connection = True
+                        logger.error(f"Connection failure during send_direct: {e}")
+                        return {}
+                    try:
+                        return json.loads(response_text)
+                    except json.JSONDecodeError:
+                        logger.error(f"Invalid JSON response: {response_text[:200]}...")
+                        return {}
+                else:
+                    if not self.ws_interface._loop or self.ws_interface._loop.is_closed():
+                        logger.error("Event loop is closed or not initialized")
+                        self._failed_connection = True
+                        return None
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.ws_interface.send_async(json_message),
+                            self.ws_interface._loop
+                        )
+                        future.result(timeout=timeout)
+                    except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
+                        self._failed_connection = True
+                        logger.error(f"Connection failure during async send: {e}")
+                    return None
+            except Exception as e:
+                logger.error(f"Error in {message_type}: {e}")
+                self._failed_connection = True
+                return {} if is_rpc else None
+
+    def regional_agent_msgevent(self, is_rpc, message_event_type, message_payload, dst_agent, timeout=8.0):
+        """Send a message event to a specific agent in the local region.
+
+        Args:
+            is_rpc: Whether to expect a response
+            message_event_type: Type of message event
+            message_payload: Message content
+            dst_agent: Destination agent
+            timeout: Timeout in seconds (default: 8.0)
+
+        Returns:
+            Response if is_rpc is True, otherwise None
+        """
+        return self._sync_dispatch('regional_agent_msgevent', message_event_type, message_payload,
+                                    is_rpc, timeout, dst_agent=dst_agent)
+
+    def agent_msgevent(self, is_rpc, message_event_type, message_payload, timeout=8.0):
+        """Send a message event to the local agent.
+
+        Args:
+            is_rpc: Whether to expect a response
+            message_event_type: Type of message event
+            message_payload: Message content
+            timeout: Timeout in seconds (default: 8.0)
+
+        Returns:
+            Response if is_rpc is True, otherwise None
+        """
+        return self._sync_dispatch('agent_msgevent', message_event_type, message_payload,
+                                    is_rpc, timeout)
+
+    def regional_plugin_msgevent(self, is_rpc, message_event_type, message_payload, dst_agent, dst_plugin, timeout=8.0):
+        """Send a message event to a specific plugin on an agent in the local region.
+
+        Args:
+            is_rpc: Whether to expect a response
+            message_event_type: Type of message event
+            message_payload: Message content
+            dst_agent: Destination agent
+            dst_plugin: Destination plugin
+            timeout: Timeout in seconds (default: 8.0)
+
+        Returns:
+            Response if is_rpc is True, otherwise None
+        """
+        return self._sync_dispatch('regional_plugin_msgevent', message_event_type, message_payload,
+                                    is_rpc, timeout, dst_agent=dst_agent, dst_plugin=dst_plugin)
+
     def reset_connection_state(self):
         """Reset the connection state flag."""
         with self._operation_lock:

@@ -132,6 +132,68 @@ class globalcontroller(CrescoMessageBase):
             logger.error(f"Error getting pipeline status: {e}")
             return -1
 
+    def get_pipeline_id_by_name(self, pipeline_name: str) -> Optional[str]:
+        """Get a pipeline ID by its name.
+
+        Args:
+            pipeline_name: Pipeline name
+
+        Returns:
+            The pipeline ID if a pipeline with the given name exists, otherwise None
+        """
+        try:
+            for pipeline in self.get_pipeline_list():
+                if pipeline.get('pipeline_name') == pipeline_name:
+                    return pipeline.get('pipeline_id')
+            return None
+        except Exception as e:
+            logger.error(f"Error getting pipeline id by name: {e}")
+            return None
+
+    def get_pipeline_export(self, pipeline_id: str) -> Dict[str, Any]:
+        """Export a pipeline.
+
+        Args:
+            pipeline_id: Pipeline ID
+
+        Returns:
+            Response containing the exported pipeline
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {
+                'action': 'getgpipelineexport',
+                'action_pipelineid': pipeline_id
+            }
+            logger.debug(f"Exporting pipeline {pipeline_id}")
+            return self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+        except Exception as e:
+            logger.error(f"Error exporting pipeline: {e}")
+            return {}
+
+    def get_pipeline_is_assignment_info(self, inode_id: str, resource_id: str) -> Dict[str, Any]:
+        """Get inode-to-resource assignment info.
+
+        Args:
+            inode_id: Inode ID
+            resource_id: Resource ID
+
+        Returns:
+            Response containing assignment information
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {
+                'action': 'getisassignmentinfo',
+                'action_inodeid': inode_id,
+                'action_resourceid': resource_id
+            }
+            logger.debug(f"Getting assignment info for inode {inode_id} / resource {resource_id}")
+            return self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+        except Exception as e:
+            logger.error(f"Error getting assignment info: {e}")
+            return {}
+
     def get_agent_list(self, dst_region: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get a list of agents.
 
@@ -189,39 +251,43 @@ class globalcontroller(CrescoMessageBase):
             logger.error(f"Error getting agent resources: {e}")
             return {}
 
-    def get_plugin_list(self) -> None:
-        """Get a list of plugins.
+    def get_plugin_repo_list(self) -> Dict[str, Any]:
+        """Get the list of plugins available in the repositories.
 
-        Note: This method is incomplete in the original code.
+        Returns:
+            Mapping of repositories to their available plugins
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {'action': 'listpluginsrepo'}
+
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+
+            if 'listpluginsrepo' in reply:
+                return json_deserialize(decompress_param(reply['listpluginsrepo']))
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting plugin repo list: {e}")
+            return {}
+
+    def get_repo_plugins(self) -> Dict[str, Any]:
+        """Get the list of plugins known to the repositories.
+
+        Returns:
+            Mapping containing the known plugins
         """
         try:
             message_event_type = 'EXEC'
             message_payload = {'action': 'listplugins'}
 
-            result = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
+            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
 
-            if 'pluginslist' in result:
-                plugins_list = json_deserialize(decompress_param(result['pluginslist']))
-                plugin_name = 'io.cresco.repo'
-                plugin_list = plugins_list.get('plugins', [])
-
-                for plugin in plugin_list:
-                    if plugin.get('pluginname') == plugin_name:
-                        message_payload = {'action': 'repolist'}
-
-                        for i in range(10):
-                            result = self.messaging.global_plugin_msgevent(
-                                True,
-                                message_event_type,
-                                message_payload,
-                                plugin['region'],
-                                plugin['agent'],
-                                plugin['name']
-                            )
-                            logger.debug(f"Plugin list result: {result}")
-                        break
+            if 'pluginslist' in reply:
+                return json_deserialize(decompress_param(reply['pluginslist']))
+            return {}
         except Exception as e:
-            logger.error(f"Error getting plugin list: {e}")
+            logger.error(f"Error getting repo plugins: {e}")
+            return {}
 
     def upload_plugin_global(self, jar_file_path: str) -> Dict[str, Any]:
         """Upload a plugin to the global repository.

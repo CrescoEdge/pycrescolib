@@ -36,12 +36,21 @@ class dataplane:
         self._lock = asyncio.Lock()
         self._service_key = service_key  # Use the provided service key
         self._event_loop = asyncio.new_event_loop()
+        self._partial_fragments = []  # accumulates send_partial() fragments until complete=True
 
     def is_active(self) -> bool:
         """Check if dataplane is active.
 
         Returns:
             True if active, False otherwise
+        """
+        return self.isActive
+
+    def connected(self) -> bool:
+        """Check if the dataplane is connected.
+
+        Returns:
+            True if connected, False otherwise
         """
         return self.isActive
 
@@ -291,6 +300,66 @@ class dataplane:
         except Exception as e:
             logger.error(f"Error sending binary file {file_path}: {e}")
             raise
+
+    async def send_partial_async(self, data: bytes, complete: bool):
+        """Send a binary payload as a fragmented WebSocket message asynchronously.
+
+        Each call appends a fragment; when complete is True the accumulated fragments are
+        flushed as a single fragmented binary message. Mirrors the Java send_partial(data,
+        complete) partial-frame streaming API.
+
+        Args:
+            data: Binary fragment to append
+            complete: True when this is the final fragment (triggers the send)
+        """
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("Data must be bytes for send_partial_async")
+        if not self.isActive:
+            logger.warning("Dataplane not active, cannot send data")
+            return
+
+        try:
+            async with self._lock:
+                self._partial_fragments.append(bytes(data))
+                if complete:
+                    fragments = self._partial_fragments
+                    self._partial_fragments = []
+                    await self.ws.send(fragments)
+                    logger.debug(f"Sent fragmented binary message: {len(fragments)} fragment(s)")
+        except Exception as e:
+            logger.error(f"Error sending partial data to dataplane: {e}")
+            self.isActive = False
+
+    def send_partial(self, data: bytes, complete: bool):
+        """Send a binary payload as a fragmented WebSocket message synchronously.
+
+        Each call appends a fragment; when complete is True the accumulated fragments are
+        flushed as a single fragmented binary message. Mirrors the Java send_partial(data,
+        complete) partial-frame streaming API.
+
+        Args:
+            data: Binary fragment to append
+            complete: True when this is the final fragment (triggers the send)
+        """
+        if not self.isActive:
+            logger.warning("Dataplane not active, cannot send data")
+            return
+
+        future = asyncio.run_coroutine_threadsafe(self.send_partial_async(data, complete), self._event_loop)
+        try:
+            future.result(timeout=5)
+        except Exception as e:
+            logger.error(f"Error sending partial data to dataplane: {e}")
+            self.isActive = False
+
+    def update_config(self, dst_region: str, dst_agent: str):
+        """Update the dataplane stream configuration.
+
+        Args:
+            dst_region: Target region
+            dst_agent: Target agent
+        """
+        self.send(f'{dst_region},{dst_agent},Trace,default')
 
     def close(self):
         """Close the dataplane connection with proper task cleanup."""
