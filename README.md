@@ -123,6 +123,12 @@ Submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`.
 | `get_plugin_repo_list()` | List plugins available in the repositories. |
 | `get_repo_plugins()` | List plugins known to the repositories. |
 | `upload_plugin_global(jar_file_path)` | Upload a plugin jar to the global repo. |
+| `get_metric_inventory(scope, dst_region, dst_agent, include_plugins, include_resource)` | Pull the fabric's unified metric inventory (controller + plugin metrics, optional resource summary). |
+| `get_capability_inventory(scope, dst_region, dst_agent, include_plugins, include_osgi)` | Pull the fabric's self-describing capability catalog (LLM-facing tool descriptors). |
+
+> The metric/capability inventories take `scope` = `'node'`, `'region'`, or `'global'`; pass
+> `dst_region`+`dst_agent` to target one agent's controller. (In the Java client these two methods
+> currently order the positional args as `dst_region, dst_agent, scope, …`.)
 
 ### `messaging`
 
@@ -151,6 +157,7 @@ All take `(is_rpc, message_event_type, message_payload, ...)` and return the rep
 | `connect()` | Open the stream. |
 | `connected()` | Whether the stream is connected. |
 | `close()` | Close the stream. |
+| `get_metrics()` | Client-side counters for this stream (messages/bytes sent + received, active). |
 
 ### logstreamer (from `get_logstreamer`)
 
@@ -171,6 +178,18 @@ constructor flag:
 ```python
 client = clientlib("localhost", 8282, "your-service-key", verify_ssl=True)
 ```
+
+## Testing & cross-language parity
+
+Both clients ship a self-contained test suite (no live mesh needed) that asserts they emit
+**identical wire messages for identical API calls** — the Python and Java suites assert the same
+generated golden corpus, so a green run on both proves the clients produce the same results.
+
+- **Python:** `pip install -e .[test] && pytest`
+- **Java:** `mvn test`
+
+See the [test-suite README](tests/README.md) for coverage, the canonical wire contract, and how to
+regenerate the golden corpus after adding or changing a method.
 
 ## License
 
