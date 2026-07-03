@@ -734,5 +734,170 @@
     "method": "get_repo_plugins",
     "name": "globalcontroller.get_repo_plugins",
     "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "global",
+      null,
+      null,
+      true,
+      true
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "getmetricinventory",
+      "action_include_plugins": "true",
+      "action_include_resource": "true",
+      "action_scope": "global"
+    },
+    "method": "get_metric_inventory",
+    "name": "globalcontroller.get_metric_inventory",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "node",
+      "R",
+      "A",
+      true,
+      false
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "getmetricinventory",
+      "action_include_plugins": "true",
+      "action_include_resource": "false",
+      "action_scope": "node"
+    },
+    "method": "get_metric_inventory",
+    "name": "globalcontroller.get_metric_inventory_node",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "global",
+      null,
+      null,
+      true,
+      false
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "getcapabilityinventory",
+      "action_include_osgi": "false",
+      "action_include_plugins": "true",
+      "action_scope": "global"
+    },
+    "method": "get_capability_inventory",
+    "name": "globalcontroller.get_capability_inventory",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "R",
+      "A",
+      "/Users/cody/code/cresco/code/pycrescolib/tests/fixtures/example-plugin.jar"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "pluginrepopull",
+      "configparams": {
+        "md5": "bba65d1fca8383f04833e43b8ec5b1a6",
+        "pluginname": "io.cresco.example",
+        "version": "1.0.0"
+      }
+    },
+    "method": "repo_pull_plugin_agent",
+    "name": "agents.repo_pull_plugin_agent",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A",
+      "/Users/cody/code/cresco/code/pycrescolib/tests/fixtures/example-plugin.jar"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "pluginupload",
+      "configparams": {
+        "md5": "bba65d1fca8383f04833e43b8ec5b1a6",
+        "pluginname": "io.cresco.example",
+        "version": "1.0.0"
+      },
+      "jardata": "UEsDBBQAAAAIAMVp41yb1nVbRwAAAFgAAAAUAAAATUVUQS1JTkYvTUFOSUZFU1QuTUbzTczLTEstLtENSy0qzszPs1Iw1DPg5XIqzUvJSdUNrsxNys/JTPZLzE21UsjM10suSi1OztdLrUjMLchJhatD1gzSzssFAFBLAQIeAxQAAAAIAMVp41yb1nVbRwAAAFgAAAAUAAAAAAAAAAEAAACkgQAAAABNRVRBLUlORi9NQU5JRkVTVC5NRlBLBQYAAAAAAQABAEIAAAB5AAAAAAA="
+    },
+    "method": "upload_plugin_agent",
+    "name": "agents.upload_plugin_agent",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A",
+      "/Users/cody/code/cresco/code/pycrescolib/tests/fixtures/example-plugin.jar"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "false",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "controllerupdate",
+      "jar_file_path": "<JAR_PATH>"
+    },
+    "method": "update_plugin_agent",
+    "name": "agents.update_plugin_agent",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "/Users/cody/code/cresco/code/pycrescolib/tests/fixtures/example-plugin.jar"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "savetorepo",
+      "configparams": {
+        "md5": "bba65d1fca8383f04833e43b8ec5b1a6",
+        "pluginname": "io.cresco.example",
+        "version": "1.0.0"
+      },
+      "jardata": "UEsDBBQAAAAIAMVp41yb1nVbRwAAAFgAAAAUAAAATUVUQS1JTkYvTUFOSUZFU1QuTUbzTczLTEstLtENSy0qzszPs1Iw1DPg5XIqzUvJSdUNrsxNys/JTPZLzE21UsjM10suSi1OztdLrUjMLchJhatD1gzSzssFAFBLAQIeAxQAAAAIAMVp41yb1nVbRwAAAFgAAAAUAAAAAAAAAAEAAACkgQAAAABNRVRBLUlORi9NQU5JRkVTVC5NRlBLBQYAAAAAAQABAEIAAAB5AAAAAAA="
+    },
+    "method": "upload_plugin_global",
+    "name": "globalcontroller.upload_plugin_global",
+    "target": "globalcontroller"
   }
 ]

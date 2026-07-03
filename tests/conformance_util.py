@@ -18,6 +18,7 @@ golden_messages.json; test_conformance.py replays it and asserts against the gol
 import asyncio
 import json
 import logging
+import os
 import threading
 
 # The normalizer probes every payload string with decompress_param to detect compressed fields;
@@ -30,6 +31,12 @@ from pycrescolib.api import api
 from pycrescolib.agents import agents
 from pycrescolib.globalcontroller import globalcontroller
 from pycrescolib.utils import decompress_param
+
+# Shared fixture jar (a byte-identical copy lives in the Java repo at
+# src/test/resources/conformance/example-plugin.jar) so get_jar_info -> {pluginname, version, md5}
+# and the base64 jardata are identical on both sides. Its absolute path is machine-specific, so the
+# normalizer replaces it with the token "<JAR_PATH>" (update_plugin_agent embeds the raw path).
+JAR_PATH = os.path.join(os.path.dirname(__file__), 'fixtures', 'example-plugin.jar')
 
 
 class CaptureWS:
@@ -83,8 +90,10 @@ def build(reply='{}'):
 
 
 def _normalize_value(value):
-    """If value is a compressed (gzip+base64) JSON payload, return the parsed object; else value."""
+    """Canonicalize a payload value: compressed JSON -> parsed object; fixture path -> token."""
     if isinstance(value, str):
+        if value == JAR_PATH:
+            return '<JAR_PATH>'
         try:
             decompressed = decompress_param(value)
             return json.loads(decompressed)
@@ -176,4 +185,22 @@ CASES = [
     {'name': 'globalcontroller.get_region_list', 'target': 'globalcontroller', 'method': 'get_region_list', 'args': []},
     {'name': 'globalcontroller.get_plugin_repo_list', 'target': 'globalcontroller', 'method': 'get_plugin_repo_list', 'args': []},
     {'name': 'globalcontroller.get_repo_plugins', 'target': 'globalcontroller', 'method': 'get_repo_plugins', 'args': []},
+
+    # --- B-2 unified metrics + capability catalog ---
+    {'name': 'globalcontroller.get_metric_inventory', 'target': 'globalcontroller', 'method': 'get_metric_inventory',
+     'args': ['global', None, None, True, True]},
+    {'name': 'globalcontroller.get_metric_inventory_node', 'target': 'globalcontroller', 'method': 'get_metric_inventory',
+     'args': ['node', 'R', 'A', True, False]},
+    {'name': 'globalcontroller.get_capability_inventory', 'target': 'globalcontroller', 'method': 'get_capability_inventory',
+     'args': ['global', None, None, True, False]},
+
+    # --- plugin-jar (file) methods: use the shared fixture jar so configparams/jardata are deterministic ---
+    {'name': 'agents.repo_pull_plugin_agent', 'target': 'agents', 'method': 'repo_pull_plugin_agent',
+     'args': ['R', 'A', JAR_PATH]},
+    {'name': 'agents.upload_plugin_agent', 'target': 'agents', 'method': 'upload_plugin_agent',
+     'args': ['R', 'A', JAR_PATH]},
+    {'name': 'agents.update_plugin_agent', 'target': 'agents', 'method': 'update_plugin_agent',
+     'args': ['R', 'A', JAR_PATH]},
+    {'name': 'globalcontroller.upload_plugin_global', 'target': 'globalcontroller', 'method': 'upload_plugin_global',
+     'args': [JAR_PATH]},
 ]
