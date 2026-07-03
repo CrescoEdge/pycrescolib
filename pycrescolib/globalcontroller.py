@@ -251,6 +251,50 @@ class globalcontroller(CrescoMessageBase):
             logger.error(f"Error getting agent resources: {e}")
             return {}
 
+    def get_metric_inventory(self, scope: str = 'global', dst_region: str = None, dst_agent: str = None,
+                             include_plugins: bool = True, include_resource: bool = True,
+                             timeout: float = 45.0) -> Dict[str, Any]:
+        """B-2 unified metrics: pull the fabric's unified metric inventory.
+
+        Merges each node's controller Micrometer groups (jvm/processor/netlink/controller/regional/global)
+        with every plugin's getmetrics output and, optionally, the cpu/mem/disk resource summary.
+
+        Args:
+            scope: 'node' (one controller), 'region' (its region), or 'global' (whole mesh).
+            dst_region: if given with dst_agent, target that agent's controller directly (node scope).
+            dst_agent: see dst_region.
+            include_plugins: include each node's plugin metrics (default True).
+            include_resource: include the cpu/mem/disk resource summary (adds sysinfo RPC latency).
+            timeout: RPC timeout in seconds; a whole-mesh scope=global aggregate fans out, so this
+                defaults high (30s) rather than the usual 8s.
+
+        Returns:
+            The unified inventory as a dict (metrics_by_source keyed by "<region>_<agent>:<bundle>",
+            plus optional resource_summary and children), or {} on failure.
+        """
+        try:
+            message_event_type = 'EXEC'
+            message_payload = {
+                'action': 'getmetricinventory',
+                'action_scope': scope if scope else 'node',
+                'action_include_plugins': str(include_plugins).lower(),
+                'action_include_resource': str(include_resource).lower(),
+            }
+
+            if dst_region is not None and dst_agent is not None:
+                reply = self.messaging.global_agent_msgevent(True, message_event_type, message_payload,
+                                                             dst_region, dst_agent, timeout)
+            else:
+                reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload,
+                                                                  timeout)
+
+            if reply and 'metricinventory' in reply:
+                return json_deserialize(reply['metricinventory'])
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting metric inventory: {e}")
+            return {}
+
     def get_plugin_repo_list(self) -> Dict[str, Any]:
         """Get the list of plugins available in the repositories.
 

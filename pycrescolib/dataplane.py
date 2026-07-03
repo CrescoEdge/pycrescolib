@@ -28,6 +28,10 @@ class dataplane:
         self.ws = None
         self.isActive = False
         self.message_count = 0
+        # B-2 unified metrics: client-side dataplane counters, exposed via get_metrics().
+        self.bytes_received = 0
+        self.bytes_sent = 0
+        self.messages_sent = 0
         self.callback = callback  # For text messages
         self.binary_callback = binary_callback  # For binary messages
         self._task = None
@@ -112,6 +116,10 @@ class dataplane:
                                     logger.info(f"Dataplane message (no callback): {message[:200]}...")
 
                         self.message_count += 1
+                        try:
+                            self.bytes_received += len(message)
+                        except Exception:
+                            pass
                     except websockets.ConnectionClosed:
                         logger.warning(f"Dataplane connection closed for {self.stream_name}")
                         self.isActive = False
@@ -238,6 +246,11 @@ class dataplane:
         try:
             async with self._lock:
                 await self.ws.send(data)
+                try:
+                    self.bytes_sent += len(data)
+                    self.messages_sent += 1
+                except Exception:
+                    pass
                 if isinstance(data, bytes):
                     logger.debug(f"Sent binary data to dataplane: {len(data)} bytes")
                 else:
@@ -245,6 +258,21 @@ class dataplane:
         except Exception as e:
             logger.error(f"Error sending data to dataplane: {e}")
             self.isActive = False
+
+    def get_metrics(self) -> dict:
+        """B-2 unified metrics: client-side dataplane counters for this stream connection.
+
+        Returns:
+            dict of messages/bytes sent and received on this dataplane connection.
+        """
+        return {
+            'stream_name': self.stream_name,
+            'messages_received': self.message_count,
+            'messages_sent': self.messages_sent,
+            'bytes_received': self.bytes_received,
+            'bytes_sent': self.bytes_sent,
+            'active': self.isActive,
+        }
 
     def send(self, data: Union[str, bytes]):
         """Send data synchronously, supporting both text and binary.
