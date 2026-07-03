@@ -30,6 +30,9 @@ dependencies = [
     "backoff>=2.0.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
 [project.urls]
 Homepage = "https://github.com/CrescoEdge/pycrescolib"
 Repository = "https://github.com/CrescoEdge/pycrescolib"
@@ -38,3 +41,9 @@ Repository = "https://github.com/CrescoEdge/pycrescolib"
 [tool.setuptools]
 packages = ["pycrescolib"]
 license-files = ["LICENSE.txt"]
+
+[tool.pytest.ini_options]
+# `pythonpath = ["."]` makes the tests/ conformance harness importable when running
+# `pytest` from the repo root (regenerate the golden with `python -m tests.gen_golden`).
+testpaths = ["tests"]
+pythonpath = ["."]

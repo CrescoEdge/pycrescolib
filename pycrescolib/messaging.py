@@ -182,7 +182,7 @@ class messaging_sync(messaging):
                 message_info = {
                     'message_type': 'global_controller_msgevent',
                     'message_event_type': message_event_type,
-                    'is_rpc': is_rpc
+                    'is_rpc': str(is_rpc).lower()
                 }
                 if (region_id is not None) and (agent_id is not None):
                     message_info['region_id'] = region_id
@@ -266,7 +266,7 @@ class messaging_sync(messaging):
                 message_info = {
                     'message_type': 'regional_controller_msgevent',
                     'message_event_type': message_event_type,
-                    'is_rpc': is_rpc
+                    'is_rpc': str(is_rpc).lower()
                 }
                 if (region_id is not None) and (agent_id is not None):
                     message_info['region_id'] = region_id
@@ -344,7 +344,7 @@ class messaging_sync(messaging):
                     'message_event_type': message_event_type,
                     'dst_region': dst_region,
                     'dst_agent': dst_agent,
-                    'is_rpc': is_rpc
+                    'is_rpc': str(is_rpc).lower()
                 }
 
                 # Create complete message
@@ -449,7 +449,7 @@ class messaging_sync(messaging):
                     'message_type': 'plugin_msgevent',
                     'message_event_type': message_event_type,
                     'dst_plugin': plugin_name,
-                    'is_rpc': is_rpc
+                    'is_rpc': str(is_rpc).lower()
                 }
 
                 # Create complete message
@@ -520,7 +520,7 @@ class messaging_sync(messaging):
                     'dst_region': dst_region,
                     'dst_agent': dst_agent,
                     'dst_plugin': dst_plugin,
-                    'is_rpc': is_rpc
+                    'is_rpc': str(is_rpc).lower()
                 }
                 message = {
                     'message_info': message_info,
@@ -584,7 +584,7 @@ class messaging_sync(messaging):
                 message_info = {
                     'message_type': message_type,
                     'message_event_type': message_event_type,
-                    'is_rpc': is_rpc
+                    'is_rpc': str(is_rpc).lower()
                 }
                 message_info.update(extra_info)
 

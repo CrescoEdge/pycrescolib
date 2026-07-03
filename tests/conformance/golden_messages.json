@@ -1,0 +1,738 @@
+[
+  {
+    "args": [
+      true,
+      "EXEC",
+      {
+        "action": "x"
+      }
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "x"
+    },
+    "method": "global_controller_msgevent",
+    "name": "messaging.global_controller_msgevent",
+    "target": "messaging"
+  },
+  {
+    "args": [
+      true,
+      "EXEC",
+      {
+        "action": "x"
+      }
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "regional_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "x"
+    },
+    "method": "regional_controller_msgevent",
+    "name": "messaging.regional_controller_msgevent",
+    "target": "messaging"
+  },
+  {
+    "args": [
+      true,
+      "EXEC",
+      {
+        "action": "x"
+      },
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "x"
+    },
+    "method": "global_agent_msgevent",
+    "name": "messaging.global_agent_msgevent",
+    "target": "messaging"
+  },
+  {
+    "args": [
+      true,
+      "EXEC",
+      {
+        "action": "x"
+      },
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "regional_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "x"
+    },
+    "method": "regional_agent_msgevent",
+    "name": "messaging.regional_agent_msgevent",
+    "target": "messaging"
+  },
+  {
+    "args": [
+      true,
+      "EXEC",
+      {
+        "action": "x"
+      }
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "agent_msgevent"
+    },
+    "message_payload": {
+      "action": "x"
+    },
+    "method": "agent_msgevent",
+    "name": "messaging.agent_msgevent",
+    "target": "messaging"
+  },
+  {
+    "args": [
+      true,
+      "EXEC",
+      {
+        "action": "x"
+      },
+      "R",
+      "A",
+      "P"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_plugin": "P",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_plugin_msgevent"
+    },
+    "message_payload": {
+      "action": "x"
+    },
+    "method": "global_plugin_msgevent",
+    "name": "messaging.global_plugin_msgevent",
+    "target": "messaging"
+  },
+  {
+    "args": [
+      true,
+      "EXEC",
+      {
+        "action": "x"
+      },
+      "A",
+      "P"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_plugin": "P",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "regional_plugin_msgevent"
+    },
+    "message_payload": {
+      "action": "x"
+    },
+    "method": "regional_plugin_msgevent",
+    "name": "messaging.regional_plugin_msgevent",
+    "target": "messaging"
+  },
+  {
+    "args": [
+      true,
+      "EXEC",
+      {
+        "action": "x"
+      },
+      "P"
+    ],
+    "message_info": {
+      "dst_plugin": "P",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "plugin_msgevent"
+    },
+    "message_payload": {
+      "action": "x"
+    },
+    "method": "plugin_msgevent",
+    "name": "messaging.plugin_msgevent",
+    "target": "messaging"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "false",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "stopcontroller"
+    },
+    "method": "stopcontroller",
+    "name": "admin.stopcontroller",
+    "target": "admin"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "false",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "restartcontroller"
+    },
+    "method": "restartcontroller",
+    "name": "admin.restartcontroller",
+    "target": "admin"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "false",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "restartframework"
+    },
+    "method": "restartframework",
+    "name": "admin.restartframework",
+    "target": "admin"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "false",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "killjvm"
+    },
+    "method": "killjvm",
+    "name": "admin.killjvm",
+    "target": "admin"
+  },
+  {
+    "args": [],
+    "message_info": {
+      "dst_plugin": "test-plugin",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "plugin_msgevent"
+    },
+    "message_payload": {
+      "action": "globalinfo"
+    },
+    "method": "get_global_info",
+    "name": "api.get_global_info",
+    "target": "api"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "iscontrolleractive"
+    },
+    "method": "is_controller_active",
+    "name": "agents.is_controller_active",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "getcontrollerstatus"
+    },
+    "method": "get_controller_status",
+    "name": "agents.get_controller_status",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A",
+      {
+        "pluginname": "io.cresco.example"
+      },
+      null
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "pluginadd",
+      "configparams": {
+        "pluginname": "io.cresco.example"
+      }
+    },
+    "method": "add_plugin_agent",
+    "name": "agents.add_plugin_agent",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A",
+      {
+        "pluginname": "io.cresco.example"
+      },
+      {
+        "edge": "1"
+      }
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "pluginadd",
+      "configparams": {
+        "pluginname": "io.cresco.example"
+      },
+      "edges": {
+        "edge": "1"
+      }
+    },
+    "method": "add_plugin_agent",
+    "name": "agents.add_plugin_agent_edges",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A",
+      "PID"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "pluginremove",
+      "pluginid": "PID"
+    },
+    "method": "remove_plugin_agent",
+    "name": "agents.remove_plugin_agent",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "pluginlist"
+    },
+    "method": "list_plugin_agent",
+    "name": "agents.list_plugin_agent",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A",
+      "PID"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "pluginstatus",
+      "pluginid": "PID"
+    },
+    "method": "status_plugin_agent",
+    "name": "agents.status_plugin_agent",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "getagentinfo"
+    },
+    "method": "get_agent_info",
+    "name": "agents.get_agent_info",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "getlog",
+      "action_inmessage": "true"
+    },
+    "method": "get_agent_log",
+    "name": "agents.get_agent_log",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "getbroadcastdiscovery"
+    },
+    "method": "get_broadcast_discovery",
+    "name": "agents.get_broadcast_discovery",
+    "target": "agents"
+  },
+  {
+    "args": [
+      "istream",
+      "idesc",
+      "ostream",
+      "odesc",
+      "select * from istream",
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "dst_agent": "A",
+      "dst_region": "R",
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_agent_msgevent"
+    },
+    "message_payload": {
+      "action": "cepadd",
+      "cepparams": {
+        "input_stream": "istream",
+        "input_stream_desc": "idesc",
+        "output_stream": "ostream",
+        "output_stream_desc": "odesc",
+        "query": "select * from istream"
+      }
+    },
+    "method": "cepadd",
+    "name": "agents.cepadd",
+    "target": "agents"
+  },
+  {
+    "args": [
+      {
+        "edges": [],
+        "nodes": [],
+        "pipeline_name": "p"
+      },
+      "0"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "gpipelinesubmit",
+      "action_gpipeline": {
+        "edges": [],
+        "nodes": [],
+        "pipeline_name": "p"
+      },
+      "action_tenantid": "0"
+    },
+    "method": "submit_pipeline",
+    "name": "globalcontroller.submit_pipeline",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "PID"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "CONFIG",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "gpipelineremove",
+      "action_pipelineid": "PID"
+    },
+    "method": "remove_pipeline",
+    "name": "globalcontroller.remove_pipeline",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "getgpipelinestatus"
+    },
+    "method": "get_pipeline_list",
+    "name": "globalcontroller.get_pipeline_list",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "PID"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "getgpipeline",
+      "action_pipelineid": "PID"
+    },
+    "method": "get_pipeline_info",
+    "name": "globalcontroller.get_pipeline_info",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "PID"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "getgpipelineexport",
+      "action_pipelineid": "PID"
+    },
+    "method": "get_pipeline_export",
+    "name": "globalcontroller.get_pipeline_export",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "INODE",
+      "RES"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "getisassignmentinfo",
+      "action_inodeid": "INODE",
+      "action_resourceid": "RES"
+    },
+    "method": "get_pipeline_is_assignment_info",
+    "name": "globalcontroller.get_pipeline_is_assignment_info",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      null
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "listagents"
+    },
+    "method": "get_agent_list",
+    "name": "globalcontroller.get_agent_list",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "R"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "listagents",
+      "action_region": "R"
+    },
+    "method": "get_agent_list",
+    "name": "globalcontroller.get_agent_list_region",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "R",
+      "A"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "resourceinfo",
+      "action_agent": "A",
+      "action_region": "R"
+    },
+    "method": "get_agent_resources",
+    "name": "globalcontroller.get_agent_resources",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [
+      "R"
+    ],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "resourceinfo",
+      "action_region": "R"
+    },
+    "method": "get_region_resources",
+    "name": "globalcontroller.get_region_resources",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "listregions"
+    },
+    "method": "get_region_list",
+    "name": "globalcontroller.get_region_list",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "listpluginsrepo"
+    },
+    "method": "get_plugin_repo_list",
+    "name": "globalcontroller.get_plugin_repo_list",
+    "target": "globalcontroller"
+  },
+  {
+    "args": [],
+    "message_info": {
+      "is_rpc": "true",
+      "message_event_type": "EXEC",
+      "message_type": "global_controller_msgevent"
+    },
+    "message_payload": {
+      "action": "listplugins"
+    },
+    "method": "get_repo_plugins",
+    "name": "globalcontroller.get_repo_plugins",
+    "target": "globalcontroller"
+  }
+]
