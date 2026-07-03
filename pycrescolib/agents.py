@@ -197,7 +197,10 @@ class agents(CrescoMessageBase):
         """
         try:
             message_event_type = 'EXEC'
-            message_payload = {'action': 'getlog'}
+            message_payload = {
+                'action': 'getlog',
+                'action_inmessage': 'true'
+            }
 
             reply = self.messaging.global_agent_msgevent(True, message_event_type, message_payload, dst_region, dst_agent)
             return reply
