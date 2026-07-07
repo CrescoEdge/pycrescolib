@@ -178,8 +178,22 @@ class dataplane:
                 compression=None
             )
 
-            # Send stream name
-            await self.ws.send(self.stream_name)
+            # Send the stream handshake as a JSON config map. The wsapi DataPlaneWsHandler only
+            # populates StreamInfo.identKey/identId (and builds a valid JMS selector) when the
+            # first frame is a JSON map with "ident_key"; the raw stream-name form leaves
+            # identKey NULL, which makes published frames throw "Property name cannot be empty
+            # or null" AND makes subscriber selectors invalid (the raw name is used verbatim as
+            # a JMS selector and matches nothing). Mirrors the Java reference client and the
+            # cppcrescolib fix (CrescoEdge/cppcrescolib@537c0d3).
+            import json as _json
+            handshake = _json.dumps({
+                "ident_key": "stream_name",
+                "ident_id": self.stream_name,
+                "io_type_key": "type",
+                "output_id": "output",
+                "input_id": "output",
+            })
+            await self.ws.send(handshake)
             logger.info(f"Connected to dataplane stream: {self.stream_name}")
 
             return True
