@@ -17,6 +17,7 @@ from .dataplane import dataplane
 from .globalcontroller import globalcontroller
 from .logstreamer import logstreamer
 from .messaging import messaging_sync as messaging
+from .stunnel import stunnel
 from .wc_interface import ws_interface
 
 # Setup logging
@@ -58,6 +59,7 @@ class clientlib:
         self.admin = admin(self.messaging)
         self.api = api(self.messaging)
         self.globalcontroller = globalcontroller(self.messaging)
+        self.stunnel = stunnel(self.messaging, self.agents)
 
         logger.info(f"Clientlib initialized for {host}:{port}")
 

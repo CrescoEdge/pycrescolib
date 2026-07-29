@@ -140,6 +140,30 @@ class agents(CrescoMessageBase):
             logger.error(f"Error listing plugins: {e}")
             return []
 
+    def find_plugin(self, dst_region: str, dst_agent: str, pluginname: str) -> Optional[str]:
+        """Resolve a plugin's id by its plugin name on an agent.
+
+        Generic helper: given a plugin name (e.g. 'io.cresco.stunnel'), return the
+        plugin_id of the first plugin with that name loaded on the agent, or None.
+        Removes the need to scrape logs for a plugin's system id.
+
+        Args:
+            dst_region: Destination region
+            dst_agent: Destination agent
+            pluginname: The plugin name to resolve (e.g. 'io.cresco.stunnel')
+
+        Returns:
+            The plugin_id string, or None if no plugin with that name is loaded.
+        """
+        try:
+            for p in (self.list_plugin_agent(dst_region, dst_agent) or []):
+                if p.get("pluginname") == pluginname:
+                    return p.get("plugin_id")
+            return None
+        except Exception as e:
+            logger.error(f"Error resolving plugin '{pluginname}' on {dst_region}/{dst_agent}: {e}")
+            return None
+
     def status_plugin_agent(self, dst_region: str, dst_agent: str, plugin_id: str) -> Dict[str, Any]:
         """Get plugin status.
         
