@@ -9,7 +9,7 @@ Part of the Cresco framework — see the **[agent repository](https://github.com
 architecture and the [Java client](https://github.com/CrescoEdge/clientlib) for the equivalent in Java.
 
 > **Standardized clients.** The Python and Java clients are kept feature- and name-identical: the same
-> submodules (`messaging`, `agents`, `admin`, `api`, `globalcontroller`), the same method names (snake_case
+> submodules (`messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`), the same method names (snake_case
 > in both languages), the same behavior, and the same examples. Anything you can do in one, you can do in the
 > other with the same call. This README is identical to the Java client's, except for the install and
 > quick-start sections below.
@@ -37,8 +37,10 @@ live in [`examples/standard_examples.py`](examples/standard_examples.py): `examp
 
 ## Concepts
 
-- **Connect once, use submodules.** A `clientlib` opens one authenticated control connection and exposes five
-  submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`.
+- **Connect once, use submodules.** A `clientlib` opens one authenticated control connection and exposes six
+  submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`.
+- **Resolve plugins by name, not by log-scraping.** `globalcontroller.find_plugin(region, agent, name)` returns the
+  live `plugin_id` for a plugin loaded on an agent, so you never parse logs to address a plugin.
 - **Streams are separate sockets.** `get_dataplane(...)` and `get_logstreamer(...)` open their own WebSocket
   connections, are tracked by name on the client, and auto-reconnect if the socket drops.
 - **RPC vs fire-and-forget.** Messaging calls take an `is_rpc` flag: when true the call blocks for the reply,
@@ -64,7 +66,7 @@ Signatures are shown language-neutrally; names and behavior are identical in bot
 | `close_logstreamer(name) -> bool` | Close and deregister the named logstreamer. |
 | `get_active_logstreamers() -> list` | List names of currently registered logstreamers. |
 
-Submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`.
+Submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`.
 
 ### `api`
 
@@ -122,6 +124,8 @@ Submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`.
 | `get_region_list()` | List regions. |
 | `get_plugin_repo_list()` | List plugins available in the repositories. |
 | `get_repo_plugins()` | List plugins known to the repositories. |
+| `list_plugins(dst_region, dst_agent)` | List the plugins loaded on an agent (via the global controller — reliable from anywhere in the mesh). |
+| `find_plugin(dst_region, dst_agent, pluginname)` | Resolve the live `plugin_id` for a plugin loaded on an agent by its plugin name (or `None`). |
 | `upload_plugin_global(jar_file_path)` | Upload a plugin jar to the global repo. |
 | `get_metric_inventory(scope, dst_region, dst_agent, include_plugins, include_resource)` | Pull the fabric's unified metric inventory (controller + plugin metrics, optional resource summary). |
 | `get_capability_inventory(scope, dst_region, dst_agent, include_plugins, include_osgi)` | Pull the fabric's self-describing capability catalog (LLM-facing tool descriptors). |
@@ -129,6 +133,24 @@ Submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`.
 > The metric/capability inventories take `scope` = `'node'`, `'region'`, or `'global'`; pass
 > `dst_region`+`dst_agent` to target one agent's controller. (In the Java client these two methods
 > currently order the positional args as `dst_region, dst_agent, scope, …`.)
+
+### `stunnel`
+
+Build and manage secure TCP tunnels through the [io.cresco.stunnel](https://github.com/CrescoEdge/stunnel)
+plugin: a listener on `src_port` at the source agent forwards to `dst_host:dst_port` reachable from the
+destination agent, with tunnel data riding the Cresco data plane. Plugin ids are auto-resolved by name via
+`find_plugin`, so callers never pass a raw `plugin_id`.
+
+| Method | Description |
+|---|---|
+| `find_plugin(region, agent)` | Resolve the `io.cresco.stunnel` plugin_id loaded on an agent (or `None`). |
+| `create_tunnel(stunnel_id, src_region, src_agent, src_port, dst_region, dst_agent, dst_host, dst_port, buffer_size)` | Create a tunnel; plugin ids auto-resolved. Returns the plugin reply (status / `stunnel_config`). |
+| `remove_tunnel(stunnel_id, src_region, src_agent, dst_region, dst_agent)` | Remove both ends of a tunnel. |
+| `get_tunnel_list(region, agent)` | List tunnels on an agent. |
+| `get_tunnel_status(region, agent, stunnel_id)` | Get a tunnel's status. |
+| `get_tunnel_config(region, agent, stunnel_id)` | Get a tunnel's config. |
+| `remove_src_tunnel(region, agent, stunnel_id)` | Remove only the source end (the server cascades the matching dst removal). |
+| `remove_dst_tunnel(region, agent, stunnel_id)` | Remove only the destination end. |
 
 ### `messaging`
 
