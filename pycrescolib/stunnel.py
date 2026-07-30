@@ -20,13 +20,17 @@ STUNNEL_PLUGIN_NAME = "io.cresco.stunnel"
 class stunnel(CrescoMessageBase):
     """Build and manage secure TCP tunnels across the Cresco mesh."""
 
-    def __init__(self, messaging, agents):
+    def __init__(self, messaging, globalcontroller):
         super().__init__(messaging)
-        self._agents = agents
+        self._gc = globalcontroller
 
     def find_plugin(self, region: str, agent: str) -> Optional[str]:
-        """Resolve the stunnel plugin_id loaded on an agent (or None)."""
-        return self._agents.find_plugin(region, agent, STUNNEL_PLUGIN_NAME)
+        """Resolve the stunnel plugin_id loaded on an agent (or None).
+
+        Uses the global controller's registration state (reliable) rather than a
+        direct per-agent RPC, which can time out on edge nodes.
+        """
+        return self._gc.find_plugin(region, agent, STUNNEL_PLUGIN_NAME)
 
     def create_tunnel(self, stunnel_id: str, src_region: str, src_agent: str, src_port: str,
                       dst_region: str, dst_agent: str, dst_host: str, dst_port: str,

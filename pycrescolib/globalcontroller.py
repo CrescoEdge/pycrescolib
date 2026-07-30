@@ -220,6 +220,52 @@ class globalcontroller(CrescoMessageBase):
             logger.error(f"Error getting agent list: {e}")
             return []
 
+    def list_plugins(self, dst_region: str, dst_agent: str) -> List[Dict[str, Any]]:
+        """List plugins loaded on an agent, resolved from the GLOBAL controller's
+        registration state.
+
+        This is a reliable global-side query (global_controller_msgevent), unlike
+        agents.list_plugin_agent which addresses the agent directly and can time
+        out on edge nodes. Each record includes 'pluginname' and 'name' (the
+        plugin_id / inode_id).
+
+        Args:
+            dst_region: Destination region
+            dst_agent: Destination agent
+
+        Returns:
+            List of plugin records for that agent.
+        """
+        try:
+            payload = {'action': 'listplugins', 'action_region': dst_region, 'action_agent': dst_agent}
+            reply = self.messaging.global_controller_msgevent(True, 'EXEC', payload)
+            if 'pluginslist' in reply:
+                data = json_deserialize(decompress_param(reply['pluginslist']))
+                if isinstance(data, dict):
+                    return data.get('plugins', [])
+                return data or []
+            return []
+        except Exception as e:
+            logger.error(f"Error listing plugins for {dst_region}/{dst_agent}: {e}")
+            return []
+
+    def find_plugin(self, dst_region: str, dst_agent: str, pluginname: str) -> Optional[str]:
+        """Resolve a plugin's id by its plugin name on an agent, via the GLOBAL
+        controller (reliable; does not depend on the per-agent RPC path).
+
+        Args:
+            dst_region: Destination region
+            dst_agent: Destination agent
+            pluginname: Plugin name to resolve (e.g. 'io.cresco.stunnel')
+
+        Returns:
+            The plugin_id string, or None if no plugin with that name is loaded.
+        """
+        for p in self.list_plugins(dst_region, dst_agent):
+            if p.get('pluginname') == pluginname:
+                return p.get('name') or p.get('inode_id')
+        return None
+
     def get_agent_resources(self, dst_region: str, dst_agent: str) -> Dict[str, Any]:
         """Get agent resources.
 
