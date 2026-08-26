@@ -168,6 +168,16 @@ class dataplane:
             # Headers for authentication
             headers = {'cresco_service_key': self._service_key}
 
+            # Close any prior socket before replacing it: silently overwriting leaked the old
+            # connection and its server-side session on every reconnect (visible as an endless
+            # stream of new client sessions on the wsapi side).
+            if self.ws is not None:
+                try:
+                    await self.ws.close()
+                except Exception:
+                    pass
+                self.ws = None
+
             # Connect. compression=None disables permessage-deflate: the dataplane carries
             # mostly binary/incompressible payloads, and per-message deflate is a large CPU cost
             # on both ends that caps throughput (it was the dominant dataplane bottleneck).
@@ -178,6 +188,13 @@ class dataplane:
                 compression=None
             )
 
+            # Re-arm activation: the FIRST frame of EVERY (re)connected session is the
+            # activation status, and the handler gates on message_count == 0. Without this
+            # reset a reconnected stream misroutes the status frame as data and can never
+            # re-activate (the client looks connected while dropping everything).
+            self.message_count = 0
+            self.isActive = False
+
             # Send the stream handshake as a JSON config map. The wsapi DataPlaneWsHandler only
             # populates StreamInfo.identKey/identId (and builds a valid JMS selector) when the
             # first frame is a JSON map with "ident_key"; the raw stream-name form leaves
@@ -186,13 +203,25 @@ class dataplane:
             # a JMS selector and matches nothing). Mirrors the Java reference client and the
             # cppcrescolib fix (CrescoEdge/cppcrescolib@537c0d3).
             import json as _json
-            handshake = _json.dumps({
-                "ident_key": "stream_name",
-                "ident_id": self.stream_name,
-                "io_type_key": "type",
-                "output_id": "output",
-                "input_id": "output",
-            })
+            # Callers pass either a plain stream name (wrap it in the config map) or a full
+            # config-map JSON (send AS-IS: wrapping it again would make the entire JSON string
+            # the stream identity, so two endpoints whose configs differ by a single byte of
+            # whitespace would silently land on different streams and never see each other).
+            handshake = None
+            try:
+                parsed = _json.loads(self.stream_name)
+                if isinstance(parsed, dict) and "ident_key" in parsed:
+                    handshake = self.stream_name
+            except Exception:
+                pass
+            if handshake is None:
+                handshake = _json.dumps({
+                    "ident_key": "stream_name",
+                    "ident_id": self.stream_name,
+                    "io_type_key": "type",
+                    "output_id": "output",
+                    "input_id": "output",
+                })
             await self.ws.send(handshake)
             logger.info(f"Connected to dataplane stream: {self.stream_name}")
 

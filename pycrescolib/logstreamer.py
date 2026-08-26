@@ -105,12 +105,27 @@ class logstreamer:
             # Headers for authentication
             headers = {'cresco_service_key': self._service_key}
 
+            # Close any prior socket before replacing it: silently overwriting leaked the old
+            # connection and its server-side session on every reconnect.
+            if self.ws is not None:
+                try:
+                    await self.ws.close()
+                except Exception:
+                    pass
+                self.ws = None
+
             # Connect
             self.ws = await websockets.connect(
                 ws_url,
                 ssl=ssl_context,
                 additional_headers=headers
             )
+
+            # Re-arm activation: the FIRST frame of EVERY (re)connected session is the
+            # activation status, and the handler gates on message_count == 0. Without this
+            # reset a reconnected stream can never re-activate.
+            self.message_count = 0
+            self.isActive = False
 
             logger.info("Connected to log streamer")
             return True

@@ -171,10 +171,15 @@ class messaging_sync(messaging):
         Returns:
             Response if is_rpc is True, otherwise None
         """
-        # Don't attempt if we know the connection is bad
+        # A previous call failed; re-check the transport instead of staying bricked forever
+        # (one RPC timeout used to permanently disable this client until reconstruction).
         if self._failed_connection:
-            logger.warning("Not attempting to send message due to known connection failure")
-            raise ConnectionError("WebSocket connection has failed")
+            if self.ws_interface.connected():
+                logger.info("Connection recovered, clearing failed-connection flag")
+                self._failed_connection = False
+            else:
+                logger.warning("Not attempting to send message due to known connection failure")
+                raise ConnectionError("WebSocket connection has failed")
 
         with self._operation_lock:  # Thread safety
             try:
@@ -207,11 +212,11 @@ class messaging_sync(messaging):
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
                     except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
-                        # Mark connection as failed for subsequent calls
+                        # Mark connection as failed; re-checked (and cleared) on the next call
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        # Return empty dict instead of raising to allow operation to continue
-                        return {}
+                        # Propagate: returning {} here masked the failure as an empty result
+                        raise ConnectionError(f"RPC send failed: {e}") from e
 
                     # Parse response
                     try:
@@ -238,6 +243,8 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
+            except ConnectionError:
+                raise
             except Exception as e:
                 logger.error(f"Error in global_controller_msgevent: {e}")
                 self._failed_connection = True
@@ -255,10 +262,15 @@ class messaging_sync(messaging):
         Returns:
             Response if is_rpc is True, otherwise None
         """
-        # Don't attempt if we know the connection is bad
+        # A previous call failed; re-check the transport instead of staying bricked forever
+        # (one RPC timeout used to permanently disable this client until reconstruction).
         if self._failed_connection:
-            logger.warning("Not attempting to send message due to known connection failure")
-            raise ConnectionError("WebSocket connection has failed")
+            if self.ws_interface.connected():
+                logger.info("Connection recovered, clearing failed-connection flag")
+                self._failed_connection = False
+            else:
+                logger.warning("Not attempting to send message due to known connection failure")
+                raise ConnectionError("WebSocket connection has failed")
 
         with self._operation_lock:  # Thread safety
             try:
@@ -291,11 +303,11 @@ class messaging_sync(messaging):
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
                     except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
-                        # Mark connection as failed for subsequent calls
+                        # Mark connection as failed; re-checked (and cleared) on the next call
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        # Return empty dict instead of raising to allow operation to continue
-                        return {}
+                        # Propagate: returning {} here masked the failure as an empty result
+                        raise ConnectionError(f"RPC send failed: {e}") from e
 
                     # Parse response
                     try:
@@ -322,6 +334,8 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
+            except ConnectionError:
+                raise
             except Exception as e:
                 logger.error(f"Error in global_controller_msgevent: {e}")
                 self._failed_connection = True
@@ -332,9 +346,14 @@ class messaging_sync(messaging):
 
     def global_agent_msgevent(self, is_rpc, message_event_type, message_payload, dst_region, dst_agent, timeout=8.0):
         """Synchronous wrapper for global_agent_msgevent using direct send."""
+        # A previous call failed; re-check the transport instead of staying bricked forever.
         if self._failed_connection:
-            logger.warning("Not attempting to send message due to known connection failure")
-            return {} if is_rpc else None
+            if self.ws_interface.connected():
+                logger.info("Connection recovered, clearing failed-connection flag")
+                self._failed_connection = False
+            else:
+                logger.warning("Not attempting to send message due to known connection failure")
+                raise ConnectionError("WebSocket connection has failed")
 
         with self._operation_lock:  # Thread safety
             try:
@@ -367,11 +386,11 @@ class messaging_sync(messaging):
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
                     except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
-                        # Mark connection as failed for subsequent calls
+                        # Mark connection as failed; re-checked (and cleared) on the next call
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        # Return empty dict instead of raising
-                        return {}
+                        # Propagate: returning {} here masked the failure as an empty result
+                        raise ConnectionError(f"RPC send failed: {e}") from e
 
                     # Parse response
                     try:
@@ -397,6 +416,8 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
+            except ConnectionError:
+                raise
             except Exception as e:
                 logger.error(f"Error in global_agent_msgevent: {e}")
                 self._failed_connection = True
@@ -438,9 +459,14 @@ class messaging_sync(messaging):
         Returns:
             Response if is_rpc is True, otherwise None
         """
+        # A previous call failed; re-check the transport instead of staying bricked forever.
         if self._failed_connection:
-            logger.warning("Not attempting to send message due to known connection failure")
-            return {} if is_rpc else None
+            if self.ws_interface.connected():
+                logger.info("Connection recovered, clearing failed-connection flag")
+                self._failed_connection = False
+            else:
+                logger.warning("Not attempting to send message due to known connection failure")
+                raise ConnectionError("WebSocket connection has failed")
 
         with self._operation_lock:  # Thread safety
             try:
@@ -474,7 +500,8 @@ class messaging_sync(messaging):
                         # Mark connection as failed for subsequent calls
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        return {}
+                        # Propagate: returning {} here masked the failure as an empty result
+                        raise ConnectionError(f"RPC send failed: {e}") from e
 
                     # Parse response
                     try:
@@ -500,6 +527,8 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
+            except ConnectionError:
+                raise
             except Exception as e:
                 logger.error(f"Error in plugin_msgevent: {e}")
                 self._failed_connection = True
@@ -508,9 +537,14 @@ class messaging_sync(messaging):
     def global_plugin_msgevent(self, is_rpc, message_event_type, message_payload, dst_region, dst_agent, dst_plugin,
                                timeout=8.0):
         """Synchronous wrapper for sending a message to a specific plugin on a specific agent."""
+        # A previous call failed; re-check the transport instead of staying bricked forever.
         if self._failed_connection:
-            logger.warning("Not attempting to send message due to known connection failure")
-            return {} if is_rpc else None
+            if self.ws_interface.connected():
+                logger.info("Connection recovered, clearing failed-connection flag")
+                self._failed_connection = False
+            else:
+                logger.warning("Not attempting to send message due to known connection failure")
+                raise ConnectionError("WebSocket connection has failed")
 
         with self._operation_lock:
             try:
@@ -538,7 +572,8 @@ class messaging_sync(messaging):
                     except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        return {}
+                        # Propagate: returning {} here masked the failure as an empty result
+                        raise ConnectionError(f"RPC send failed: {e}") from e
 
                     try:
                         response = json.loads(response_text)
@@ -562,6 +597,8 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
+            except ConnectionError:
+                raise
             except Exception as e:
                 logger.error(f"Error in global_plugin_msgevent: {e}")
                 self._failed_connection = True
@@ -575,9 +612,14 @@ class messaging_sync(messaging):
         the decoded response dict for RPC calls or None for non-RPC calls. extra_info carries the
         routing fields (dst_region/dst_agent/dst_plugin) specific to each variant.
         """
+        # A previous call failed; re-check the transport instead of staying bricked forever.
         if self._failed_connection:
-            logger.warning("Not attempting to send message due to known connection failure")
-            return {} if is_rpc else None
+            if self.ws_interface.connected():
+                logger.info("Connection recovered, clearing failed-connection flag")
+                self._failed_connection = False
+            else:
+                logger.warning("Not attempting to send message due to known connection failure")
+                raise ConnectionError("WebSocket connection has failed")
 
         with self._operation_lock:  # Thread safety
             try:
@@ -604,7 +646,8 @@ class messaging_sync(messaging):
                     except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        return {}
+                        # Propagate: returning {} here masked the failure as an empty result
+                        raise ConnectionError(f"RPC send failed: {e}") from e
                     try:
                         return json.loads(response_text)
                     except json.JSONDecodeError:
