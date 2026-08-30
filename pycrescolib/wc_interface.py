@@ -13,6 +13,7 @@ import json
 import asyncio
 import time
 import threading
+import uuid
 import concurrent.futures
 from typing import Optional, Dict, Any
 
@@ -300,6 +301,22 @@ class ws_interface:
             logger.error("WebSocket not connected")
             raise ConnectionError("WebSocket not connected")
 
+        # Correlate request and response: the controller echoes request params back on the
+        # reply, so stamp a client-side id into message_payload. Without this, an RPC that
+        # timed out client-side leaves its late reply in the stream and the NEXT call reads
+        # that stale frame as its own response — one slow RPC desynchronizes every call after
+        # it. With the id, unmatched frames are discarded instead of being returned.
+        rpc_id = None
+        try:
+            envelope = json.loads(json_message)
+            payload = envelope.get('message_payload')
+            if isinstance(payload, dict):
+                rpc_id = uuid.uuid4().hex
+                payload['client_rpc_id'] = rpc_id
+                json_message = json.dumps(envelope)
+        except Exception:
+            rpc_id = None  # unstampable message: fall back to uncorrelated recv
+
         # Safe access to the event loop
         with self._lock:
             if not self._loop or self._loop.is_closed():
@@ -308,7 +325,7 @@ class ws_interface:
 
             # Create a future in the SAME thread as the event loop
             future = asyncio.run_coroutine_threadsafe(
-                self._send_receive(json_message, timeout),
+                self._send_receive(json_message, timeout, rpc_id),
                 self._loop
             )
 
@@ -323,12 +340,15 @@ class ws_interface:
                 logger.error(f"Error sending message: {e}")
                 raise
 
-    async def _send_receive(self, json_message, timeout):
-        """Send a message and receive a response as a coroutine with timeout.
+    async def _send_receive(self, json_message, timeout, rpc_id=None):
+        """Send a message and receive the MATCHING response as a coroutine with timeout.
 
         Args:
             json_message: JSON message as string
             timeout: Timeout in seconds
+            rpc_id: correlation id stamped into the request payload; when set, frames that
+                do not contain it (stale replies of previously timed-out RPCs, unsolicited
+                frames) are discarded rather than returned
 
         Returns:
             Response text
@@ -339,8 +359,16 @@ class ws_interface:
         try:
             # Send with timeout
             await asyncio.wait_for(self.ws.send(json_message), timeout=timeout / 2)
-            # Receive with timeout
-            return await asyncio.wait_for(self.ws.recv(), timeout=timeout)
+            # Receive until the correlated response arrives or the deadline passes
+            deadline = asyncio.get_event_loop().time() + timeout
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+                response = await asyncio.wait_for(self.ws.recv(), timeout=remaining)
+                if (rpc_id is None) or (rpc_id in response):
+                    return response
+                logger.warning(f"Discarding stale/uncorrelated response frame ({len(response)} bytes)")
         except asyncio.TimeoutError:
             logger.error(f"Operation timed out after {timeout} seconds")
             raise TimeoutError(f"Operation timed out after {timeout} seconds")

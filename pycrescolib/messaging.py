@@ -211,7 +211,13 @@ class messaging_sync(messaging):
                     # For RPC calls, use the direct synchronous send
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
-                    except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
+                    except (TimeoutError, concurrent.futures.TimeoutError) as e:
+                        # an RPC timeout is an application-level non-answer, not a dead
+                        # transport: the connection stays usable (late replies are drained
+                        # via correlation ids), so do NOT latch _failed_connection
+                        logger.error(f"RPC timed out during send_direct: {e}")
+                        raise TimeoutError(f"RPC timed out: {e}") from e
+                    except ConnectionError as e:
                         # Mark connection as failed; re-checked (and cleared) on the next call
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
@@ -243,7 +249,7 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
-            except ConnectionError:
+            except (ConnectionError, TimeoutError):
                 raise
             except Exception as e:
                 logger.error(f"Error in global_controller_msgevent: {e}")
@@ -302,7 +308,13 @@ class messaging_sync(messaging):
                     # For RPC calls, use the direct synchronous send
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
-                    except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
+                    except (TimeoutError, concurrent.futures.TimeoutError) as e:
+                        # an RPC timeout is an application-level non-answer, not a dead
+                        # transport: the connection stays usable (late replies are drained
+                        # via correlation ids), so do NOT latch _failed_connection
+                        logger.error(f"RPC timed out during send_direct: {e}")
+                        raise TimeoutError(f"RPC timed out: {e}") from e
+                    except ConnectionError as e:
                         # Mark connection as failed; re-checked (and cleared) on the next call
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
@@ -334,7 +346,7 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
-            except ConnectionError:
+            except (ConnectionError, TimeoutError):
                 raise
             except Exception as e:
                 logger.error(f"Error in global_controller_msgevent: {e}")
@@ -385,7 +397,13 @@ class messaging_sync(messaging):
                     # For RPC calls, use the direct synchronous send
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
-                    except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
+                    except (TimeoutError, concurrent.futures.TimeoutError) as e:
+                        # an RPC timeout is an application-level non-answer, not a dead
+                        # transport: the connection stays usable (late replies are drained
+                        # via correlation ids), so do NOT latch _failed_connection
+                        logger.error(f"RPC timed out during send_direct: {e}")
+                        raise TimeoutError(f"RPC timed out: {e}") from e
+                    except ConnectionError as e:
                         # Mark connection as failed; re-checked (and cleared) on the next call
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
@@ -416,7 +434,7 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
-            except ConnectionError:
+            except (ConnectionError, TimeoutError):
                 raise
             except Exception as e:
                 logger.error(f"Error in global_agent_msgevent: {e}")
@@ -496,11 +514,14 @@ class messaging_sync(messaging):
                     # For RPC calls, use the direct synchronous send
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
-                    except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
-                        # Mark connection as failed for subsequent calls
+                    except (TimeoutError, concurrent.futures.TimeoutError) as e:
+                        # an RPC timeout is an application-level non-answer, not a dead
+                        # transport (late replies are drained via correlation ids)
+                        logger.error(f"RPC timed out during send_direct: {e}")
+                        raise TimeoutError(f"RPC timed out: {e}") from e
+                    except ConnectionError as e:
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        # Propagate: returning {} here masked the failure as an empty result
                         raise ConnectionError(f"RPC send failed: {e}") from e
 
                     # Parse response
@@ -527,7 +548,7 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
-            except ConnectionError:
+            except (ConnectionError, TimeoutError):
                 raise
             except Exception as e:
                 logger.error(f"Error in plugin_msgevent: {e}")
@@ -569,10 +590,14 @@ class messaging_sync(messaging):
                 if is_rpc:
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
-                    except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
+                    except (TimeoutError, concurrent.futures.TimeoutError) as e:
+                        # an RPC timeout is an application-level non-answer, not a dead
+                        # transport (late replies are drained via correlation ids)
+                        logger.error(f"RPC timed out during send_direct: {e}")
+                        raise TimeoutError(f"RPC timed out: {e}") from e
+                    except ConnectionError as e:
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        # Propagate: returning {} here masked the failure as an empty result
                         raise ConnectionError(f"RPC send failed: {e}") from e
 
                     try:
@@ -597,7 +622,7 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
-            except ConnectionError:
+            except (ConnectionError, TimeoutError):
                 raise
             except Exception as e:
                 logger.error(f"Error in global_plugin_msgevent: {e}")
@@ -643,10 +668,14 @@ class messaging_sync(messaging):
                 if is_rpc:
                     try:
                         response_text = self.ws_interface.send_direct(json_message, timeout=timeout)
-                    except (ConnectionError, TimeoutError, concurrent.futures.TimeoutError) as e:
+                    except (TimeoutError, concurrent.futures.TimeoutError) as e:
+                        # an RPC timeout is an application-level non-answer, not a dead
+                        # transport (late replies are drained via correlation ids)
+                        logger.error(f"RPC timed out during send_direct: {e}")
+                        raise TimeoutError(f"RPC timed out: {e}") from e
+                    except ConnectionError as e:
                         self._failed_connection = True
                         logger.error(f"Connection failure during send_direct: {e}")
-                        # Propagate: returning {} here masked the failure as an empty result
                         raise ConnectionError(f"RPC send failed: {e}") from e
                     try:
                         return json.loads(response_text)
