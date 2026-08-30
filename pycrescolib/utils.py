@@ -116,7 +116,7 @@ def get_jar_info(jar_file_path: str) -> Dict[str, str]:
         
         # Calculate MD5 hash
         with open(jar_file_path, 'rb') as f:
-            params['md5'] = hashlib.md5(f.read()).hexdigest()
+            params['md5'] = hashlib.sha256(f.read()).hexdigest()
         
         # Validate required fields
         if 'pluginname' not in params:
