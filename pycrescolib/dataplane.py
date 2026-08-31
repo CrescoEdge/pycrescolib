@@ -215,13 +215,24 @@ class dataplane:
             except Exception:
                 pass
             if handshake is None:
-                handshake = _json.dumps({
-                    "ident_key": "stream_name",
-                    "ident_id": self.stream_name,
-                    "io_type_key": "type",
-                    "output_id": "output",
-                    "input_id": "output",
-                })
+                if "=" in self.stream_name:
+                    # A JMS selector query (e.g. "cresco_msg_type='stunnel_trace'") must go RAW:
+                    # the server's stream_query path uses it verbatim as the subscription
+                    # selector. Wrapping it as an ident built the invalid selector
+                    # stream_name='cresco_msg_type='stunnel_trace'' and the listener never
+                    # activated (InvalidSelectorException server-side, silent to the client).
+                    # Plain stream names never contain '='; selector queries always do.
+                    # NOTE: a query-subscribed connection is receive-only — publishing needs
+                    # an ident_key handshake so frames carry a routable identity.
+                    handshake = self.stream_name
+                else:
+                    handshake = _json.dumps({
+                        "ident_key": "stream_name",
+                        "ident_id": self.stream_name,
+                        "io_type_key": "type",
+                        "output_id": "output",
+                        "input_id": "output",
+                    })
             await self.ws.send(handshake)
             logger.info(f"Connected to dataplane stream: {self.stream_name}")
 
