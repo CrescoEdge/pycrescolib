@@ -822,7 +822,7 @@
     "message_payload": {
       "action": "pluginrepopull",
       "configparams": {
-        "md5": "bba65d1fca8383f04833e43b8ec5b1a6",
+        "md5": "37200c19a00f9c6408f2e1d6a1cf2e6b7108e3124dbc6b5b9bbfa0d4743a160a",
         "pluginname": "io.cresco.example",
         "version": "1.0.0"
       }
@@ -847,7 +847,7 @@
     "message_payload": {
       "action": "pluginupload",
       "configparams": {
-        "md5": "bba65d1fca8383f04833e43b8ec5b1a6",
+        "md5": "37200c19a00f9c6408f2e1d6a1cf2e6b7108e3124dbc6b5b9bbfa0d4743a160a",
         "pluginname": "io.cresco.example",
         "version": "1.0.0"
       },
@@ -890,7 +890,7 @@
     "message_payload": {
       "action": "savetorepo",
       "configparams": {
-        "md5": "bba65d1fca8383f04833e43b8ec5b1a6",
+        "md5": "37200c19a00f9c6408f2e1d6a1cf2e6b7108e3124dbc6b5b9bbfa0d4743a160a",
         "pluginname": "io.cresco.example",
         "version": "1.0.0"
       },
