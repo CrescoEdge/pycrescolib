@@ -4,6 +4,7 @@ Dataplane implementation for Cresco communications with binary data support.
 import concurrent
 import ssl
 import json
+import os
 import time
 import logging
 import asyncio
@@ -185,7 +186,11 @@ class dataplane:
                 ws_url,
                 ssl=ssl_context,
                 additional_headers=headers,
-                compression=None
+                compression=None,
+                # The websockets default (1 MiB) silently capped dataplane messages; the server accepts 1 GiB.
+                # Bounded, not unlimited: each connection may buffer this much per message.
+                max_size=int(os.environ.get("CRESCO_DATAPLANE_MAX_MESSAGE", 64 * 1024 * 1024)),
+                write_limit=4 * 1024 * 1024
             )
 
             # Re-arm activation: the FIRST frame of EVERY (re)connected session is the
