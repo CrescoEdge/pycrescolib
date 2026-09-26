@@ -313,7 +313,13 @@ class ws_interface:
             if isinstance(payload, dict):
                 rpc_id = uuid.uuid4().hex
                 payload['client_rpc_id'] = rpc_id
-                json_message = json.dumps(envelope)
+            # Ask the server to wait as long as this client will (less a second, so its answer,
+            # including a timeout answer, arrives before we give up). Without it the server's RPC
+            # gives up at its 30 s default while a long operation (a large publish) still runs.
+            info = envelope.get('message_info')
+            if isinstance(info, dict) and 'rpc_timeout_ms' not in info:
+                info['rpc_timeout_ms'] = str(int(max(1.0, timeout - 1.0) * 1000))
+            json_message = json.dumps(envelope)
         except Exception:
             rpc_id = None  # unstampable message: fall back to uncorrelated recv
 
