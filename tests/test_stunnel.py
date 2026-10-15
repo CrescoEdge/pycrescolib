@@ -51,6 +51,14 @@ def plugins_reply(plugin_id):
     return reply(pluginslist=compress_param(json.dumps({'plugins': plugins})))
 
 
+def agent_plugins_reply(plugin_id):
+    """The agent's own pluginlist reply (rows carry plugin_id / pluginname)."""
+    rows = [{'pluginname': 'io.cresco.example', 'plugin_id': 'plugin-other'}]
+    if plugin_id is not None:
+        rows.append({'pluginname': STUNNEL_PLUGIN_NAME, 'plugin_id': plugin_id})
+    return reply(status_code='10', plugin_list=compress_param(json.dumps(rows)))
+
+
 def sent(ws, i):
     return json.loads(ws.sent[i])
 
@@ -164,9 +172,13 @@ def test_deploy_plugin_is_noop_when_loaded(env):
 
 def test_deploy_plugin_adds_embedded_jar_when_missing(env):
     ws, st = env
-    ws.replies.extend([plugins_reply(None), reply(status_code='10', pluginid='plugin-new')])
+    ws.replies.extend([plugins_reply(None), agent_plugins_reply(None),
+                       reply(status_code='10', pluginid='plugin-new')])
     assert st.deploy_plugin('R', 'A') == 'plugin-new'
-    add = sent(ws, 1)
+    confirm = sent(ws, 1)             # "not loaded" confirmed with the agent before adding
+    assert confirm['message_info']['message_type'] == 'global_agent_msgevent'
+    assert confirm['message_payload']['action'] == 'pluginlist'
+    add = sent(ws, 2)
     info = add['message_info']
     assert info['message_type'] == 'global_agent_msgevent' and info['message_event_type'] == 'CONFIG'
     assert (info['dst_region'], info['dst_agent']) == ('R', 'A')
@@ -177,11 +189,12 @@ def test_deploy_plugin_adds_embedded_jar_when_missing(env):
 
 def test_deploy_plugin_uploads_jar(env):
     ws, st = env
-    ws.replies.extend([plugins_reply(None), reply(status_code='10', jar_file_path='/agent/repo/x.jar'),
+    ws.replies.extend([plugins_reply(None), agent_plugins_reply(None),
+                       reply(status_code='10', jar_file_path='/agent/repo/x.jar'),
                        reply(status_code='10', pluginid='plugin-up')])
     assert st.deploy_plugin('R', 'A', JAR_PATH) == 'plugin-up'
-    assert sent(ws, 1)['message_payload']['action'] == 'pluginupload'
-    add = sent(ws, 2)
+    assert sent(ws, 2)['message_payload']['action'] == 'pluginupload'
+    add = sent(ws, 3)
     configparams = json.loads(decompress_param(add['message_payload']['configparams']))
     jar = get_jar_info(JAR_PATH)
     assert configparams == {'pluginname': STUNNEL_PLUGIN_NAME, 'jarfile': '/agent/repo/x.jar',
@@ -190,6 +203,6 @@ def test_deploy_plugin_uploads_jar(env):
 
 def test_deploy_plugin_failed_upload_is_none(env):
     ws, st = env
-    ws.replies.extend([plugins_reply(None), reply(status_code='9')])
+    ws.replies.extend([plugins_reply(None), agent_plugins_reply(None), reply(status_code='9')])
     assert st.deploy_plugin('R', 'A', JAR_PATH) is None
-    assert len(ws.sent) == 2          # no pluginadd after a failed upload
+    assert len(ws.sent) == 3          # no pluginadd after a failed upload

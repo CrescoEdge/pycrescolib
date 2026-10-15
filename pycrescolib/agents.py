@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Dict, Any, List, Optional, Union
 
-from .base_classes import CrescoMessageBase
+from .base_classes import CrescoMessageBase, CrescoQueryError, require_reply_field
 from .utils import compress_param, decompress_param, get_jar_info, encode_data, json_serialize, json_deserialize, read_file_bytes
 
 # Setup logging
@@ -125,20 +125,18 @@ class agents(CrescoMessageBase):
             dst_agent: Destination agent
             
         Returns:
-            List of plugins
-        """
-        try:
-            message_event_type = 'CONFIG'
-            message_payload = {'action': 'pluginlist'}
+            List of plugins (each with 'plugin_id' and 'pluginname'); [] only when the
+            agent answered "no plugins".
 
-            reply = self.messaging.global_agent_msgevent(True, message_event_type, message_payload, dst_region, dst_agent)
-            
-            if 'plugin_list' in reply:
-                return json_deserialize(decompress_param(reply['plugin_list']))
-            return []
-        except Exception as e:
-            logger.error(f"Error listing plugins: {e}")
-            return []
+        Raises:
+            CrescoQueryError: the agent (or the fabric on its behalf) answered with an
+                error, e.g. status_code 9 or wsapi's 504, or without a plugin list.
+            TimeoutError, ConnectionError: no answer. Never treat either as "none loaded".
+        """
+        message_payload = {'action': 'pluginlist'}
+        reply = self.messaging.global_agent_msgevent(True, 'CONFIG', message_payload, dst_region, dst_agent)
+        return json_deserialize(decompress_param(
+            require_reply_field(reply, 'plugin_list', f'list_plugin_agent {dst_region}/{dst_agent}'))) or []
 
     def find_plugin(self, dst_region: str, dst_agent: str, pluginname: str) -> Optional[str]:
         """Resolve a plugin's id by its plugin name on an agent.
@@ -153,16 +151,17 @@ class agents(CrescoMessageBase):
             pluginname: The plugin name to resolve (e.g. 'io.cresco.stunnel')
 
         Returns:
-            The plugin_id string, or None if no plugin with that name is loaded.
+            The plugin_id string, or None if the agent answered and no plugin with that
+            name is loaded.
+
+        Raises:
+            CrescoQueryError, TimeoutError, ConnectionError: the agent's plugin list could
+            not be read (see list_plugin_agent). None always means "asked: not loaded".
         """
-        try:
-            for p in (self.list_plugin_agent(dst_region, dst_agent) or []):
-                if p.get("pluginname") == pluginname:
-                    return p.get("plugin_id")
-            return None
-        except Exception as e:
-            logger.error(f"Error resolving plugin '{pluginname}' on {dst_region}/{dst_agent}: {e}")
-            return None
+        for p in self.list_plugin_agent(dst_region, dst_agent):
+            if p.get("pluginname") == pluginname:
+                return p.get("plugin_id")
+        return None
 
     def status_plugin_agent(self, dst_region: str, dst_agent: str, plugin_id: str) -> Dict[str, Any]:
         """Get plugin status.

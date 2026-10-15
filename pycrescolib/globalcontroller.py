@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Dict, Any, List, Optional, Union
 
-from .base_classes import CrescoMessageBase
+from .base_classes import CrescoMessageBase, CrescoQueryError, require_reply_field
 from .utils import decompress_param, get_jar_info, compress_param, encode_data, json_serialize, json_deserialize, read_file_bytes
 
 # Setup logging
@@ -74,21 +74,17 @@ class globalcontroller(CrescoMessageBase):
         """Get a list of pipelines.
 
         Returns:
-            List of pipelines
+            List of pipelines ([] only when the global controller answered "none").
+
+        Raises:
+            CrescoQueryError: the global answered with an error / without a pipeline list.
+            TimeoutError, ConnectionError: no answer.
         """
-        try:
-            message_event_type = 'EXEC'
-            message_payload = {'action': 'getgpipelinestatus'}
-
-            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
-
-            if 'pipelineinfo' in reply:
-                pipeline_info = json_deserialize(decompress_param(reply['pipelineinfo']))
-                return pipeline_info.get('pipelines', [])
-            return []
-        except Exception as e:
-            logger.error(f"Error getting pipeline list: {e}")
-            return []
+        message_payload = {'action': 'getgpipelinestatus'}
+        reply = self.messaging.global_controller_msgevent(True, 'EXEC', message_payload)
+        pipeline_info = json_deserialize(decompress_param(
+            require_reply_field(reply, 'pipelineinfo', 'get_pipeline_list')))
+        return (pipeline_info or {}).get('pipelines', [])
 
     def get_pipeline_info(self, pipeline_id: str) -> Dict[str, Any]:
         """Get pipeline information.
@@ -140,15 +136,15 @@ class globalcontroller(CrescoMessageBase):
 
         Returns:
             The pipeline ID if a pipeline with the given name exists, otherwise None
+
+        Raises:
+            CrescoQueryError, TimeoutError, ConnectionError: the pipeline list could not be
+            read (see get_pipeline_list) -- None always means "no such pipeline".
         """
-        try:
-            for pipeline in self.get_pipeline_list():
-                if pipeline.get('pipeline_name') == pipeline_name:
-                    return pipeline.get('pipeline_id')
-            return None
-        except Exception as e:
-            logger.error(f"Error getting pipeline id by name: {e}")
-            return None
+        for pipeline in self.get_pipeline_list():
+            if pipeline.get('pipeline_name') == pipeline_name:
+                return pipeline.get('pipeline_id')
+        return None
 
     def get_pipeline_export(self, pipeline_id: str) -> Dict[str, Any]:
         """Export a pipeline.
@@ -201,24 +197,19 @@ class globalcontroller(CrescoMessageBase):
             dst_region: Optional destination region filter
 
         Returns:
-            List of agents
+            List of agents ([] only when the global controller answered "none").
+
+        Raises:
+            CrescoQueryError: the global answered with an error / without an agent list.
+            TimeoutError, ConnectionError: no answer.
         """
-        try:
-            message_event_type = 'EXEC'
-            message_payload = {'action': 'listagents'}
-
-            if dst_region is not None:
-                message_payload['action_region'] = dst_region
-
-            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
-
-            if 'agentslist' in reply:
-                agent_list = json_deserialize(decompress_param(reply['agentslist']))
-                return agent_list.get('agents', [])
-            return []
-        except Exception as e:
-            logger.error(f"Error getting agent list: {e}")
-            return []
+        message_payload = {'action': 'listagents'}
+        if dst_region is not None:
+            message_payload['action_region'] = dst_region
+        reply = self.messaging.global_controller_msgevent(True, 'EXEC', message_payload)
+        agent_list = json_deserialize(decompress_param(
+            require_reply_field(reply, 'agentslist', 'get_agent_list')))
+        return (agent_list or {}).get('agents', [])
 
     def list_plugins(self, dst_region: str, dst_agent: str) -> List[Dict[str, Any]]:
         """List plugins loaded on an agent, resolved from the GLOBAL controller's
@@ -234,20 +225,22 @@ class globalcontroller(CrescoMessageBase):
             dst_agent: Destination agent
 
         Returns:
-            List of plugin records for that agent.
+            List of plugin records for that agent; [] only when the global answered
+            "no plugins".
+
+        Raises:
+            CrescoQueryError: the global answered with an error (e.g. wsapi's 504 when the
+                fabric did not answer in time) or without a plugin list.
+            TimeoutError, ConnectionError: no answer at all (e.g. right after a global
+                restart). Never treat either as "not loaded".
         """
-        try:
-            payload = {'action': 'listplugins', 'action_region': dst_region, 'action_agent': dst_agent}
-            reply = self.messaging.global_controller_msgevent(True, 'EXEC', payload)
-            if 'pluginslist' in reply:
-                data = json_deserialize(decompress_param(reply['pluginslist']))
-                if isinstance(data, dict):
-                    return data.get('plugins', [])
-                return data or []
-            return []
-        except Exception as e:
-            logger.error(f"Error listing plugins for {dst_region}/{dst_agent}: {e}")
-            return []
+        payload = {'action': 'listplugins', 'action_region': dst_region, 'action_agent': dst_agent}
+        reply = self.messaging.global_controller_msgevent(True, 'EXEC', payload)
+        data = json_deserialize(decompress_param(
+            require_reply_field(reply, 'pluginslist', f'list_plugins {dst_region}/{dst_agent}')))
+        if isinstance(data, dict):
+            return data.get('plugins', [])
+        return data or []
 
     def find_plugin(self, dst_region: str, dst_agent: str, pluginname: str) -> Optional[str]:
         """Resolve a plugin's id by its plugin name on an agent, via the GLOBAL
@@ -259,7 +252,12 @@ class globalcontroller(CrescoMessageBase):
             pluginname: Plugin name to resolve (e.g. 'io.cresco.stunnel')
 
         Returns:
-            The plugin_id string, or None if no plugin with that name is loaded.
+            The plugin_id string, or None if the global answered and no plugin with that
+            name is loaded.
+
+        Raises:
+            CrescoQueryError, TimeoutError, ConnectionError: the inventory could not be read
+            (see list_plugins). None therefore always means "asked: not loaded".
         """
         for p in self.list_plugins(dst_region, dst_agent):
             if p.get('pluginname') == pluginname:
@@ -478,18 +476,13 @@ class globalcontroller(CrescoMessageBase):
         """Get a list of regions.
 
         Returns:
-            List of regions
+            List of regions ([] only when the global controller answered "none").
+
+        Raises:
+            CrescoQueryError: the global answered with an error / without a region list.
+            TimeoutError, ConnectionError: no answer.
         """
-        try:
-            message_event_type = 'EXEC'
-            message_payload = {'action': 'listregions'}
-
-            reply = self.messaging.global_controller_msgevent(True, message_event_type, message_payload)
-
-            if 'regionslist' in reply:
-                regions_list = json_deserialize(decompress_param(reply['regionslist']))
-                return regions_list.get('regions', [])
-            return []
-        except Exception as e:
-            logger.error(f"Error getting region list: {e}")
-            return []
+        reply = self.messaging.global_controller_msgevent(True, 'EXEC', {'action': 'listregions'})
+        regions_list = json_deserialize(decompress_param(
+            require_reply_field(reply, 'regionslist', 'get_region_list')))
+        return (regions_list or {}).get('regions', [])

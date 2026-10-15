@@ -10,6 +10,33 @@ import backoff
 # Set up logging
 logger = logging.getLogger(__name__)
 
+class CrescoQueryError(RuntimeError):
+    """An inventory/lookup query could not be answered.
+
+    Raised when the reply to a listing RPC (plugins, agents, regions, pipelines) is an error
+    reply, is missing the field a successful reply always carries, or is not a reply at all.
+    It means "could not ask", which is different from "asked, and the answer is empty":
+    callers that act on the answer (e.g. deploy a plugin when it is not loaded) must not
+    treat it as "none". Transport failures raise TimeoutError / ConnectionError instead.
+    """
+
+
+def require_reply_field(reply: Any, field: str, what: str) -> Any:
+    """Return reply[field], or raise CrescoQueryError when the query was not answered.
+
+    A successful listing reply always carries its field (the controller sets it even for an
+    empty list); an error reply carries 'error' / 'status_desc' instead (e.g. wsapi's 504 when
+    the fabric did not answer in time).
+    """
+    if isinstance(reply, dict) and reply.get(field) is not None:
+        return reply[field]
+    if not isinstance(reply, dict):
+        raise CrescoQueryError(f"{what}: no reply")
+    reason = reply.get('error') or reply.get('status_desc') or f"reply has no '{field}'"
+    status = reply.get('status') or reply.get('status_code')
+    raise CrescoQueryError(f"{what}: {reason}" + (f" (status {status})" if status else ""))
+
+
 class CrescoMessageBase:
     """Base class for all Cresco message interactions."""
     

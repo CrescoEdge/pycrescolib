@@ -26,6 +26,7 @@ import threading
 logging.getLogger('pycrescolib.utils').setLevel(logging.CRITICAL)
 
 from pycrescolib.messaging import messaging_sync
+from pycrescolib.base_classes import CrescoQueryError
 from pycrescolib.admin import admin
 from pycrescolib.api import api
 from pycrescolib.agents import agents
@@ -115,7 +116,11 @@ def invoke(case):
     """Run one CASE against a fresh mock client; return the normalized outgoing message."""
     clients = build()
     target = clients[case['target']]
-    getattr(target, case['method'])(*case['args'])
+    try:
+        getattr(target, case['method'])(*case['args'])
+    except CrescoQueryError:
+        # the canned '{}' reply is not a listing; the call still sent its request (asserted below)
+        pass
     assert clients['ws'].sent, f"{case['name']}: no message was sent"
     result = normalize_message(clients['ws'].sent[-1])
     clients['ws'].close()

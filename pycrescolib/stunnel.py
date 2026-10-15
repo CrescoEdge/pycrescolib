@@ -3,7 +3,7 @@
 Wraps the stunnel plugin's CONFIG/EXEC actions (create / remove / list / status /
 config / health check / metrics / network tuning) and its deployment as a
 first-class client submodule, mirroring agents / admin / globalcontroller and the
-Java client's crescoclient.core.Stunnel method for method. Plugin ids are resolved by name via agents.find_plugin, so
+Java client's crescoclient.core.Stunnel method for method. Plugin ids are resolved by name via globalcontroller.find_plugin, so
 callers never have to scrape logs or know a plugin's system id.
 """
 import json
@@ -40,21 +40,42 @@ class stunnel(CrescoMessageBase):
         """Resolve the stunnel plugin_id loaded on an agent (or None).
 
         Uses the global controller's registration state (reliable) rather than a
-        direct per-agent RPC, which can time out on edge nodes.
+        direct per-agent RPC, which can time out on edge nodes. None means the global
+        answered "not loaded"; a failed query raises (CrescoQueryError / TimeoutError /
+        ConnectionError, see globalcontroller.list_plugins).
         """
         return self._gc.find_plugin(region, agent, STUNNEL_PLUGIN_NAME)
 
     def deploy_plugin(self, region: str, agent: str, jar_file_path: Optional[str] = None) -> Optional[str]:
-        """Ensure the stunnel plugin is running on an agent; returns its plugin_id (or None).
+        """Ensure exactly one stunnel plugin is running on an agent; returns its plugin_id.
 
         A no-op when it is already loaded. Otherwise, with jar_file_path the jar is uploaded
         to the agent (pluginupload) and started from there; without it the stunnel jar
         embedded in the agent is started. No CADL pipeline: a direct pluginadd to the agent.
+
+        Before adding, the agent itself is asked (pluginlist): the global's registration
+        state can briefly lag the agent (e.g. right after a global restart, until the agent
+        re-sends its plugin state), and "the global does not list it" must not start a
+        second copy.
+
+        Returns:
+            The plugin_id, or None if the upload/add was attempted and failed.
+
+        Raises:
+            CrescoQueryError, TimeoutError, ConnectionError: the plugin inventory could not
+            be read, so nothing was added (retry later). Before 1.3.2 this case returned
+            the result of a blind add and could start a duplicate plugin.
         """
+        existing = self.find_plugin(region, agent)
+        if existing:
+            return existing
+        # the global says "not loaded": confirm with the agent (authoritative for what runs there)
+        existing = self._agents.find_plugin(region, agent, STUNNEL_PLUGIN_NAME)
+        if existing:
+            logger.info("stunnel deploy_plugin: %s/%s already runs %s (not yet listed by the global)",
+                        region, agent, existing)
+            return existing
         try:
-            existing = self.find_plugin(region, agent)
-            if existing:
-                return existing
             configparams: Dict[str, Any] = {'pluginname': STUNNEL_PLUGIN_NAME}
             if jar_file_path is not None:
                 upload = self._agents.upload_plugin_agent(region, agent, jar_file_path)

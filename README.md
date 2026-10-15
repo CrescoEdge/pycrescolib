@@ -43,6 +43,14 @@ live in [`examples/standard_examples.py`](examples/standard_examples.py): `examp
   live `plugin_id` for a plugin loaded on an agent, so you never parse logs to address a plugin.
 - **Streams are separate sockets.** `get_dataplane(...)` and `get_logstreamer(...)` open their own WebSocket
   connections, are tracked by name on the client, and auto-reconnect if the socket drops.
+- **"Not found" vs "couldn't ask".** Inventory queries (`globalcontroller.list_plugins` / `find_plugin` /
+  `get_agent_list` / `get_region_list` / `get_pipeline_list` / `get_pipeline_id_by_name`,
+  `agents.list_plugin_agent` / `find_plugin`) return an empty list / `None` **only** when the fabric answered
+  "none". When the query fails they raise: `CrescoQueryError` (from `pycrescolib.base_classes`; an error reply
+  such as wsapi's 504, or a reply without the list) or `TimeoutError` / `ConnectionError` (no reply, e.g. right
+  after a global restart). Since 1.3.2; earlier versions returned `[]` / `None` on failure, which made
+  check-then-act code (`if not find_plugin(...): add`) start duplicate plugins. Code that only displays the
+  result can catch the exception; code that acts on "absent" must not.
 - **RPC vs fire-and-forget.** Messaging calls take an `is_rpc` flag: when true the call blocks for the reply,
   when false it is sent without waiting.
 
@@ -96,7 +104,8 @@ Submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`, `s
 | `get_controller_status(dst_region, dst_agent)` | Controller status. |
 | `add_plugin_agent(dst_region, dst_agent, configparams, edges=None)` | Add a plugin to an agent. |
 | `remove_plugin_agent(dst_region, dst_agent, plugin_id)` | Remove a plugin from an agent. |
-| `list_plugin_agent(dst_region, dst_agent)` | List plugins on an agent. |
+| `list_plugin_agent(dst_region, dst_agent)` | List plugins on an agent (asks the agent itself; raises if it cannot be read). |
+| `find_plugin(dst_region, dst_agent, pluginname)` | Resolve a plugin's `plugin_id` by name from the agent's own list (or `None` if not loaded). |
 | `status_plugin_agent(dst_region, dst_agent, plugin_id)` | Get plugin status. |
 | `get_agent_info(dst_region, dst_agent)` | Get agent information. |
 | `get_agent_log(dst_region, dst_agent)` | Get agent logs. |
@@ -144,7 +153,7 @@ destination agent, with tunnel data riding the Cresco data plane. Plugin ids are
 | Method | Description |
 |---|---|
 | `find_plugin(region, agent)` | Resolve the `io.cresco.stunnel` plugin_id loaded on an agent (or `None`). |
-| `deploy_plugin(region, agent, jar_file_path=None)` | Ensure the stunnel plugin runs on an agent: no-op if loaded, else upload `jar_file_path` (`pluginupload`) or start the copy embedded in the agent (`stunnel.jar`) with `pluginadd`. Returns the plugin_id or `None`. |
+| `deploy_plugin(region, agent, jar_file_path=None)` | Ensure the stunnel plugin runs on an agent: no-op if loaded, else upload `jar_file_path` (`pluginupload`) or start the copy embedded in the agent (`stunnel.jar`) with `pluginadd`. "Not loaded" is confirmed with the agent itself (`pluginlist`) before adding, because the global's view can lag the agent briefly after a restart. Returns the plugin_id, or `None` if the add failed; **raises** (and adds nothing) when the inventory could not be read. |
 | `create_tunnel(stunnel_id, src_region, src_agent, src_port, dst_region, dst_agent, dst_host, dst_port, buffer_size="8192", src_plugin_id=None, dst_plugin_id=None, watchdog_timeout=None, performance_report_rate=None)` | Create a tunnel; plugin ids auto-resolved; optional params are sent only when not `None`. Returns the parsed `stunnel_config`. |
 | `remove_tunnel(stunnel_id, src_region, src_agent, dst_region, dst_agent, src_plugin_id=None, dst_plugin_id=None)` | Remove both ends of a tunnel; returns `{stunnel_id, src_removal, dst_removal, fully_removed}`. |
 | `get_tunnel_list(region, agent)` | List tunnels on an agent. |
@@ -156,7 +165,8 @@ destination agent, with tunnel data riding the Cresco data plane. Plugin ids are
 | `remove_src_tunnel(region, agent, stunnel_id)` | Remove only the source end (the server cascades the matching dst removal). |
 | `remove_dst_tunnel(region, agent, stunnel_id)` | Remove only the destination end. |
 
-Every per-agent method also takes an optional trailing `plugin_id` to skip the lookup. Method names and
+Every per-agent method also takes an optional trailing `plugin_id` to skip the lookup; when the lookup
+itself fails the method raises (see "Not found vs couldn't ask" above) instead of reporting "no plugin". Method names and
 arguments match the Java client's `crescoclient.core.Stunnel`.
 
 ### `messaging`

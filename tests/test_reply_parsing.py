@@ -6,6 +6,10 @@ given a canned reply, each method must return the correctly-decoded value (decom
 """
 import json
 
+import pytest
+
+from pycrescolib.base_classes import CrescoQueryError
+
 from pycrescolib.utils import compress_param, json_serialize
 from tests.conformance_util import build
 
@@ -20,8 +24,16 @@ def test_get_pipeline_list_decodes_compressed_pipelines():
     c['ws'].close()
 
 
-def test_get_pipeline_list_empty_when_missing():
+def test_get_pipeline_list_raises_when_missing():
+    # a reply without 'pipelineinfo' is a failed query, not "no pipelines"
     c = _client({})
+    with pytest.raises(CrescoQueryError):
+        c['globalcontroller'].get_pipeline_list()
+    c['ws'].close()
+
+
+def test_get_pipeline_list_empty_when_answered_empty():
+    c = _client({'pipelineinfo': compress_param(json_serialize({'pipelines': []}))})
     assert c['globalcontroller'].get_pipeline_list() == []
     c['ws'].close()
 
