@@ -1,8 +1,9 @@
 """Client-side helper for the io.cresco.stunnel plugin.
 
 Wraps the stunnel plugin's CONFIG/EXEC actions (create / remove / list / status /
-config) as a first-class client submodule, mirroring agents / admin /
-globalcontroller. Plugin ids are resolved by name via agents.find_plugin, so
+config / health check / metrics / network tuning) and its deployment as a
+first-class client submodule, mirroring agents / admin / globalcontroller and the
+Java client's crescoclient.core.Stunnel method for method. Plugin ids are resolved by name via agents.find_plugin, so
 callers never have to scrape logs or know a plugin's system id.
 """
 import json
@@ -10,19 +11,30 @@ import logging
 from typing import Dict, Any, Optional, List
 
 from .base_classes import CrescoMessageBase
-from .utils import decompress_param
+from .utils import decompress_param, get_jar_info
 
 logger = logging.getLogger(__name__)
 
 STUNNEL_PLUGIN_NAME = "io.cresco.stunnel"
+# Path of the stunnel jar embedded in the Cresco agent jar (used by deploy_plugin).
+STUNNEL_EMBEDDED_JAR = "stunnel.jar"
+# status the plugin returns on success
+STATUS_OK = "10"
+# keys the plugin's nettuning action reads (all integers); others are ignored by the plugin
+NET_TUNING_KEYS = ("net_socket_buffer_bytes", "net_read_chunk_bytes", "net_write_high_water_bytes",
+                   "net_fc_window_bytes", "net_trace_sample_n")
 
 
 class stunnel(CrescoMessageBase):
     """Build and manage secure TCP tunnels across the Cresco mesh."""
 
-    def __init__(self, messaging, globalcontroller):
+    def __init__(self, messaging, globalcontroller, agents=None):
         super().__init__(messaging)
         self._gc = globalcontroller
+        if agents is None:
+            from .agents import agents as _agents
+            agents = _agents(messaging)
+        self._agents = agents
 
     def find_plugin(self, region: str, agent: str) -> Optional[str]:
         """Resolve the stunnel plugin_id loaded on an agent (or None).
@@ -32,16 +44,51 @@ class stunnel(CrescoMessageBase):
         """
         return self._gc.find_plugin(region, agent, STUNNEL_PLUGIN_NAME)
 
+    def deploy_plugin(self, region: str, agent: str, jar_file_path: Optional[str] = None) -> Optional[str]:
+        """Ensure the stunnel plugin is running on an agent; returns its plugin_id (or None).
+
+        A no-op when it is already loaded. Otherwise, with jar_file_path the jar is uploaded
+        to the agent (pluginupload) and started from there; without it the stunnel jar
+        embedded in the agent is started. No CADL pipeline: a direct pluginadd to the agent.
+        """
+        try:
+            existing = self.find_plugin(region, agent)
+            if existing:
+                return existing
+            configparams: Dict[str, Any] = {'pluginname': STUNNEL_PLUGIN_NAME}
+            if jar_file_path is not None:
+                upload = self._agents.upload_plugin_agent(region, agent, jar_file_path)
+                if not isinstance(upload, dict) or not upload.get('jar_file_path'):
+                    logger.error("stunnel deploy_plugin: upload of %s to %s/%s failed: %s",
+                                 jar_file_path, region, agent, upload)
+                    return None
+                configparams['jarfile'] = upload['jar_file_path']
+                jar_info = get_jar_info(jar_file_path)
+                if jar_info:
+                    configparams['version'] = str(jar_info.get('version'))
+                    configparams['md5'] = str(jar_info.get('md5'))
+            else:
+                configparams['jarfile'] = STUNNEL_EMBEDDED_JAR
+            added = self._agents.add_plugin_agent(region, agent, configparams)
+            return added.get('pluginid') if isinstance(added, dict) else None
+        except Exception as e:
+            logger.error("stunnel deploy_plugin on %s/%s failed: %s", region, agent, e)
+            return None
+
     def create_tunnel(self, stunnel_id: str, src_region: str, src_agent: str, src_port: str,
                       dst_region: str, dst_agent: str, dst_host: str, dst_port: str,
-                      buffer_size: str = "8192",
+                      buffer_size: Optional[str] = "8192",
                       src_plugin_id: Optional[str] = None,
-                      dst_plugin_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                      dst_plugin_id: Optional[str] = None,
+                      watchdog_timeout: Optional[str] = None,
+                      performance_report_rate: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Create a tunnel: a listener on src_port at the source agent forwards to
         dst_host:dst_port reachable from the destination agent. The src stunnel
         plugin coordinates configdsttunnel on the destination itself.
 
-        Plugin ids are auto-resolved by name when not supplied.
+        Plugin ids are auto-resolved by name when not supplied. buffer_size,
+        watchdog_timeout (ms) and performance_report_rate (ms) are sent only when
+        not None (the plugin applies its defaults otherwise).
         Returns the parsed stunnel_config on success, else None.
         """
         src_plugin_id = src_plugin_id or self.find_plugin(src_region, src_agent)
@@ -59,8 +106,13 @@ class stunnel(CrescoMessageBase):
             'action_dst_region': dst_region,
             'action_dst_agent': dst_agent,
             'action_dst_plugin': dst_plugin_id,
-            'action_buffer_size': str(buffer_size),
         }
+        if buffer_size is not None:
+            payload['action_buffer_size'] = str(buffer_size)
+        if watchdog_timeout is not None:
+            payload['action_watchdog_timeout'] = str(watchdog_timeout)
+        if performance_report_rate is not None:
+            payload['action_performance_report_rate'] = str(performance_report_rate)
         result = self.messaging.global_plugin_msgevent(True, 'CONFIG', payload, src_region, src_agent, src_plugin_id)
         if isinstance(result, dict) and 'stunnel_config' in result:
             return json.loads(decompress_param(result['stunnel_config']))
@@ -98,8 +150,51 @@ class stunnel(CrescoMessageBase):
             return json.loads(result['tunnel_config'])
         return None
 
+    def tunnel_health_check(self, region: str, agent: str, stunnel_id: str, plugin_id: Optional[str] = None) -> bool:
+        """True if the agent's stunnel plugin holds a config for the tunnel (tunnelhealthcheck,
+        the probe the two tunnel ends use on each other)."""
+        plugin_id = plugin_id or self.find_plugin(region, agent)
+        if not plugin_id:
+            return False
+        result = self.messaging.global_plugin_msgevent(True, 'EXEC',
+                                                       {'action': 'tunnelhealthcheck', 'action_stunnel_id': stunnel_id},
+                                                       region, agent, plugin_id)
+        return isinstance(result, dict) and result.get('status') == STATUS_OK
+
+    def get_metrics(self, region: str, agent: str, plugin_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """The stunnel plugin's live metrics (getmetrics: per-tunnel throughput, sessions,
+        flow-control counters) as a dict, or None."""
+        plugin_id = plugin_id or self.find_plugin(region, agent)
+        if not plugin_id:
+            return None
+        result = self.messaging.global_plugin_msgevent(True, 'EXEC', {'action': 'getmetrics'}, region, agent, plugin_id)
+        if isinstance(result, dict) and result.get('metrics') is not None:
+            try:
+                return json.loads(result['metrics'])
+            except (TypeError, ValueError) as e:
+                logger.error("stunnel get_metrics: unparseable metrics from %s/%s: %s", region, agent, e)
+        return None
+
+    def set_net_tuning(self, region: str, agent: str, tuning: Dict[str, Any],
+                       plugin_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Apply plugin-wide network tuning on an agent's stunnel plugin (nettuning, CONFIG).
+
+        Recognized keys (integers): net_socket_buffer_bytes, net_read_chunk_bytes,
+        net_write_high_water_bytes, net_fc_window_bytes, net_trace_sample_n (see
+        NET_TUNING_KEYS); unknown keys are ignored by the plugin. New values apply to
+        connections opened afterwards. Returns the reply (status "10" on success) or None.
+        """
+        plugin_id = plugin_id or self.find_plugin(region, agent)
+        if not plugin_id:
+            return None
+        payload = {k: str(v) for k, v in tuning.items()}
+        payload['action'] = 'nettuning'
+        result = self.messaging.global_plugin_msgevent(True, 'CONFIG', payload, region, agent, plugin_id)
+        return result if isinstance(result, dict) else None
+
     def remove_src_tunnel(self, region: str, agent: str, stunnel_id: str, plugin_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Tear down the source side of a tunnel."""
+        """Tear down the source side of a tunnel (its listener, sessions and persisted
+        config); the source plugin also asks the destination to drop its end."""
         plugin_id = plugin_id or self.find_plugin(region, agent)
         if not plugin_id:
             return None
@@ -119,7 +214,9 @@ class stunnel(CrescoMessageBase):
     def remove_tunnel(self, stunnel_id: str, src_region: str, src_agent: str,
                       dst_region: str, dst_agent: str,
                       src_plugin_id: Optional[str] = None, dst_plugin_id: Optional[str] = None) -> Dict[str, Any]:
-        """Remove both ends of a tunnel. Plugin ids are auto-resolved when omitted."""
+        """Remove both ends of a tunnel (source first, then destination). Plugin ids are
+        auto-resolved when omitted. Returns {stunnel_id, src_removal, dst_removal,
+        fully_removed}; fully_removed is True when both ends answered."""
         out: Dict[str, Any] = {'stunnel_id': stunnel_id, 'src_removal': None, 'dst_removal': None, 'fully_removed': False}
         out['src_removal'] = self.remove_src_tunnel(src_region, src_agent, stunnel_id, src_plugin_id)
         out['dst_removal'] = self.remove_dst_tunnel(dst_region, dst_agent, stunnel_id, dst_plugin_id)

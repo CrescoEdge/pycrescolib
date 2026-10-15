@@ -59,7 +59,7 @@ class clientlib:
         self.admin = admin(self.messaging)
         self.api = api(self.messaging)
         self.globalcontroller = globalcontroller(self.messaging)
-        self.stunnel = stunnel(self.messaging, self.globalcontroller)
+        self.stunnel = stunnel(self.messaging, self.globalcontroller, self.agents)
 
         logger.info(f"Clientlib initialized for {host}:{port}")
 

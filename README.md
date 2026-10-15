@@ -144,13 +144,20 @@ destination agent, with tunnel data riding the Cresco data plane. Plugin ids are
 | Method | Description |
 |---|---|
 | `find_plugin(region, agent)` | Resolve the `io.cresco.stunnel` plugin_id loaded on an agent (or `None`). |
-| `create_tunnel(stunnel_id, src_region, src_agent, src_port, dst_region, dst_agent, dst_host, dst_port, buffer_size)` | Create a tunnel; plugin ids auto-resolved. Returns the plugin reply (status / `stunnel_config`). |
-| `remove_tunnel(stunnel_id, src_region, src_agent, dst_region, dst_agent)` | Remove both ends of a tunnel. |
+| `deploy_plugin(region, agent, jar_file_path=None)` | Ensure the stunnel plugin runs on an agent: no-op if loaded, else upload `jar_file_path` (`pluginupload`) or start the copy embedded in the agent (`stunnel.jar`) with `pluginadd`. Returns the plugin_id or `None`. |
+| `create_tunnel(stunnel_id, src_region, src_agent, src_port, dst_region, dst_agent, dst_host, dst_port, buffer_size="8192", src_plugin_id=None, dst_plugin_id=None, watchdog_timeout=None, performance_report_rate=None)` | Create a tunnel; plugin ids auto-resolved; optional params are sent only when not `None`. Returns the parsed `stunnel_config`. |
+| `remove_tunnel(stunnel_id, src_region, src_agent, dst_region, dst_agent, src_plugin_id=None, dst_plugin_id=None)` | Remove both ends of a tunnel; returns `{stunnel_id, src_removal, dst_removal, fully_removed}`. |
 | `get_tunnel_list(region, agent)` | List tunnels on an agent. |
-| `get_tunnel_status(region, agent, stunnel_id)` | Get a tunnel's status. |
+| `get_tunnel_status(region, agent, stunnel_id)` | Get a tunnel's status (`ACTIVE`/`RECOVERING`/`DOWN`/`UNKNOWN`). |
 | `get_tunnel_config(region, agent, stunnel_id)` | Get a tunnel's config. |
+| `tunnel_health_check(region, agent, stunnel_id)` | `True` if that agent's plugin holds a config for the tunnel (`tunnelhealthcheck`). |
+| `get_metrics(region, agent)` | The plugin's live metrics (`getmetrics`) as a dict. |
+| `set_net_tuning(region, agent, tuning)` | Plugin-wide network tuning (`nettuning`): `net_socket_buffer_bytes`, `net_read_chunk_bytes`, `net_write_high_water_bytes`, `net_fc_window_bytes`, `net_trace_sample_n`; applies to connections opened afterwards. |
 | `remove_src_tunnel(region, agent, stunnel_id)` | Remove only the source end (the server cascades the matching dst removal). |
 | `remove_dst_tunnel(region, agent, stunnel_id)` | Remove only the destination end. |
+
+Every per-agent method also takes an optional trailing `plugin_id` to skip the lookup. Method names and
+arguments match the Java client's `crescoclient.core.Stunnel`.
 
 ### `messaging`
 
