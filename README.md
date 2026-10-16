@@ -50,7 +50,9 @@ live in [`examples/standard_examples.py`](examples/standard_examples.py): `examp
   such as wsapi's 504, or a reply without the list) or `TimeoutError` / `ConnectionError` (no reply, e.g. right
   after a global restart). Since 1.3.2; earlier versions returned `[]` / `None` on failure, which made
   check-then-act code (`if not find_plugin(...): add`) start duplicate plugins. Code that only displays the
-  result can catch the exception; code that acts on "absent" must not.
+  result can catch the exception; code that acts on "absent" must not. A control socket the server closed (e.g.
+  a global restart) raises `ConnectionError` and `connected()` turns False, so reconnect with `connect()`;
+  earlier versions kept `connected()` True and answered every RPC with an empty reply.
 - **RPC vs fire-and-forget.** Messaging calls take an `is_rpc` flag: when true the call blocks for the reply,
   when false it is sent without waiting.
 

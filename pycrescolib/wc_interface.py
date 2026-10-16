@@ -378,6 +378,14 @@ class ws_interface:
         except asyncio.TimeoutError:
             logger.error(f"Operation timed out after {timeout} seconds")
             raise TimeoutError(f"Operation timed out after {timeout} seconds")
+        except websockets.exceptions.ConnectionClosed as e:
+            # The server went away (e.g. a global restart). Report it as a dead transport: before, the
+            # ConnectionClosed escaped as a generic error that messaging turned into an empty reply,
+            # while connected() kept answering True, so callers never reconnected and read "no plugins"
+            # / "no agents" from a socket that could no longer ask anything.
+            self._connected = False
+            logger.error(f"WebSocket connection closed: {e}")
+            raise ConnectionError(f"WebSocket connection closed: {e}") from e
         except Exception as e:
             logger.error(f"Error in WebSocket send/receive: {e}")
             raise
