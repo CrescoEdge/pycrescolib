@@ -17,6 +17,25 @@ from contextlib import asynccontextmanager
 # Setup logging
 logger = logging.getLogger(__name__)
 
+#: wsapi activation status: the listener is active
+STATUS_ACTIVE = 10
+#: wsapi activation status: the broker refused the subscription (another tenant's stream, or a stream bound to
+#: another recipient with cresco_to); the stream stays open for sending
+STATUS_SUBSCRIPTION_REFUSED = 40
+
+
+class DataplaneSubscriptionRefused(Exception):
+    """The broker refused this dataplane subscription (wsapi status 40).
+
+    Raised by :meth:`dataplane.connect` when the dataplane was given a callback (the caller wants to receive). A
+    dataplane without callbacks is a sender: it stays connected and can still send.
+    """
+
+    def __init__(self, stream_name: str, reason: str):
+        super().__init__(f"subscription to dataplane stream {stream_name!r} refused: {reason}")
+        self.stream_name = stream_name
+        self.reason = reason
+
 
 class dataplane:
     """Dataplane class for streaming data in Cresco."""
@@ -42,6 +61,7 @@ class dataplane:
         self._service_key = service_key  # Use the provided service key
         self._event_loop = asyncio.new_event_loop()
         self._partial_fragments = []  # accumulates send_partial() fragments until complete=True
+        self.subscription_refused = None  # the broker's reason, when it refused this stream's subscription
 
     def is_active(self) -> bool:
         """Check if dataplane is active.
@@ -79,10 +99,7 @@ class dataplane:
                             try:
                                 # Activation message should be text/JSON
                                 if isinstance(message, str):
-                                    json_incoming = json.loads(message)
-                                    if int(json_incoming.get('status_code', 0)) == 10:
-                                        self.isActive = True
-                                        logger.info(f"Dataplane {self.stream_name} activated")
+                                    self._on_activation(json.loads(message))
                                 else:
                                     # Not expected to get binary for activation
                                     logger.warning("Received binary data for activation message")
@@ -199,6 +216,7 @@ class dataplane:
             # re-activate (the client looks connected while dropping everything).
             self.message_count = 0
             self.isActive = False
+            self.subscription_refused = None
 
             # Send the stream handshake as a JSON config map. The wsapi DataPlaneWsHandler only
             # populates StreamInfo.identKey/identId (and builds a valid JMS selector) when the
@@ -285,7 +303,29 @@ class dataplane:
         if not self.isActive:
             logger.warning(f"Timeout waiting for dataplane {self.stream_name} activation")
 
+        self._raise_if_refused()
         return self.isActive
+
+    def _on_activation(self, status: Dict[str, Any]) -> None:
+        """Apply the wsapi activation reply (the first frame of every session)."""
+        code = int(status.get('status_code', 0))
+        if code == STATUS_ACTIVE:
+            self.isActive = True
+            logger.info(f"Dataplane {self.stream_name} activated")
+        elif code == STATUS_SUBSCRIPTION_REFUSED:
+            self.isActive = True  # still usable for sending
+            self.subscription_refused = status.get('status_desc', 'subscription refused')
+            logger.warning(f"Dataplane {self.stream_name}: {self.subscription_refused} (open for sending only)")
+
+    def _raise_if_refused(self) -> None:
+        """A receiver whose subscription was refused gets a typed error; a pure sender carries on."""
+        if self.subscription_refused is not None and (self.callback or self.binary_callback):
+            reason = self.subscription_refused
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise DataplaneSubscriptionRefused(self.stream_name, reason)
 
     async def _wait_for_activation(self):
         """Wait for the dataplane to become active."""
