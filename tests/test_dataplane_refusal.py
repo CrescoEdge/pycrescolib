@@ -9,8 +9,11 @@ REFUSAL = {"status_code": str(STATUS_SUBSCRIPTION_REFUSED),
 
 
 def test_a_receiver_gets_a_typed_error():
-    dp = dataplane('localhost', 8282, 'stream', 'key', callback=lambda m: None)
+    told = []
+    dp = dataplane('localhost', 8282, 'stream', 'key', callback=lambda m: None, refused_callback=told.append)
     dp._on_activation(REFUSAL)
+    assert not dp.is_active()
+    assert told == [REFUSAL["status_desc"]]
     with pytest.raises(DataplaneSubscriptionRefused) as e:
         dp._raise_if_refused()
     assert e.value.reason == REFUSAL["status_desc"]
@@ -31,3 +34,15 @@ def test_an_active_listener_is_not_refused():
     dp._raise_if_refused()
     assert dp.is_active()
     assert dp.subscription_refused is None
+
+
+def test_every_refusal_is_reported_including_reconnects():
+    told = []
+    dp = dataplane('localhost', 8282, 'stream', 'key', binary_callback=lambda b: None, refused_callback=told.append)
+    dp._on_activation({"status_code": "10"})
+    assert dp.is_active()
+    for _ in range(2):                                   # two reconnects, both refused
+        dp.message_count = 0; dp.isActive = False; dp.subscription_refused = None
+        dp._on_activation(REFUSAL)
+        assert not dp.is_active()
+    assert told == [REFUSAL["status_desc"]] * 2

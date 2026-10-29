@@ -41,7 +41,7 @@ class dataplane:
     """Dataplane class for streaming data in Cresco."""
 
     def __init__(self, host: str, port: int, stream_name: str, service_key: str, callback: Optional[Callable] = None,
-                 binary_callback: Optional[Callable] = None):
+                 binary_callback: Optional[Callable] = None, refused_callback: Optional[Callable[[str], None]] = None):
         self.host = host
         self.port = port
         self.stream_name = stream_name
@@ -62,6 +62,8 @@ class dataplane:
         self._event_loop = asyncio.new_event_loop()
         self._partial_fragments = []  # accumulates send_partial() fragments until complete=True
         self.subscription_refused = None  # the broker's reason, when it refused this stream's subscription
+        # called with the broker's reason on every refusal, the first connect and every reconnect alike
+        self.refused_callback = refused_callback
 
     def is_active(self) -> bool:
         """Check if dataplane is active.
@@ -157,6 +159,13 @@ class dataplane:
         await asyncio.sleep(2)  # Initial delay before monitoring starts
         while self._running:
             try:
+                if self.subscription_refused is not None and self._is_receiver():
+                    # refused by policy: retrying every 5 s will not help; look again now and then (a policy can change)
+                    await asyncio.sleep(60)
+                    if not self._running:
+                        break
+                    await self._connect()
+                    continue
                 if not self.isActive or self.ws is None:
                     logger.warning(f"Dataplane connection lost for {self.stream_name}, attempting to reconnect...")
                     self.isActive = False
@@ -313,13 +322,26 @@ class dataplane:
             self.isActive = True
             logger.info(f"Dataplane {self.stream_name} activated")
         elif code == STATUS_SUBSCRIPTION_REFUSED:
-            self.isActive = True  # still usable for sending
             self.subscription_refused = status.get('status_desc', 'subscription refused')
-            logger.warning(f"Dataplane {self.stream_name}: {self.subscription_refused} (open for sending only)")
+            if self._is_receiver():
+                # a receiver that cannot receive is not active, whether this is the first session or a reconnect
+                self.isActive = False
+                logger.warning(f"Dataplane {self.stream_name}: {self.subscription_refused} (this receiver gets nothing)")
+                if self.refused_callback:
+                    try:
+                        self.refused_callback(self.subscription_refused)
+                    except Exception as e:
+                        logger.error(f"Error in refused_callback: {e}")
+            else:
+                self.isActive = True  # a sender can still send
+                logger.warning(f"Dataplane {self.stream_name}: {self.subscription_refused} (open for sending only)")
+
+    def _is_receiver(self) -> bool:
+        return bool(self.callback or self.binary_callback)
 
     def _raise_if_refused(self) -> None:
         """A receiver whose subscription was refused gets a typed error; a pure sender carries on."""
-        if self.subscription_refused is not None and (self.callback or self.binary_callback):
+        if self.subscription_refused is not None and self._is_receiver():
             reason = self.subscription_refused
             try:
                 self.close()
