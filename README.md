@@ -65,7 +65,7 @@ Signatures are shown language-neutrally; names and behavior are identical in bot
 
 | Method | Description |
 |---|---|
-| `clientlib(host, port, service_key=None, verify_ssl=None, *, ca_file=None, fingerprint=None, check_hostname=True, user=None, password=None)` | Create the client for a wsapi endpoint (see [Security](#security-tls-trust-and-credentials)). |
+| `clientlib(host, port, service_key=None, verify_ssl=None, *, ca_file=None, fingerprint=None, check_hostname=True, user=None, password=None, token=None)` | Create the client for a wsapi endpoint (see [Security](#security-tls-trust-and-credentials)). |
 | `connect(block_on_connect=True) -> bool` | Connect to the wsapi endpoint; block until connected when `block_on_connect`. |
 | `connected() -> bool` | Return True if connected to the wsapi endpoint. |
 | `close() -> bool` | Close the client connection and all managed streams. |
@@ -277,13 +277,20 @@ way logs a WARNING. It cannot be combined with `ca_file` or `fingerprint`, and i
 for the whole Python process, as 1.3.2 and earlier did.)
 
 
-**Credentials.** A per-user credential (created on the agent with wsapi's `CredentialTool`) or the legacy service key:
+**Credentials.** An API token, a per-user password (both made on the agent with wsapi's `CredentialTool`), or the
+legacy service key:
 
 ```python
+client = clientlib(host, 8282, token=os.environ["CRESCO_API_TOKEN"], fingerprint=fp)   # tools, automation
+client = clientlib(host, 8282, fingerprint=fp)          # the same: CRESCO_API_TOKEN when no credentials are given
 client = clientlib(host, 8282, user="alice", password=os.environ["CRESCO_PASSWORD"], fingerprint=fp)
 client = clientlib(host, 8282, "service-key", fingerprint=fp)
 ```
 
+**Tools and automation (GaiaKeep included) should use an API token.** `CredentialTool token add <ws.users> <user>
+[--expires-days N] [--label L]` on the agent prints it once (`cwt1_...`); it acts as its user, goes as
+`Authorization: Bearer` inside TLS, and is revoked with `token revoke`. It has 256 random bits, so wsapi never throttles
+it per user: strangers guessing the user's password delay password logins from new places, never a tool's token.
 The user name and password go as HTTP Basic inside TLS. wsapi answers 401 for a bad credential, 403 for a user of
 another tenant, and 429 after repeated failures from one address. After such a refusal (or an untrusted certificate)
 a dataplane or log stream retries once a minute, not every few seconds, so it does not lock out its host.

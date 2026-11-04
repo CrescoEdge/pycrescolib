@@ -2,6 +2,7 @@
 Client library for Cresco framework interaction with improved resource management.
 """
 import logging
+import os
 import asyncio
 import time
 import threading
@@ -19,7 +20,7 @@ from .globalcontroller import globalcontroller
 from .logstreamer import logstreamer
 from .messaging import messaging_sync as messaging
 from .stunnel import stunnel
-from .tls import Credentials, TrustSettings
+from .tls import ENV_API_TOKEN, Credentials, TrustSettings
 from .wc_interface import ws_interface
 
 # Setup logging
@@ -31,7 +32,7 @@ class clientlib:
 
     def __init__(self, host: str, port: int, service_key: Optional[str] = None, verify_ssl: Optional[bool] = None, *,
                  ca_file: Optional[str] = None, fingerprint=None, check_hostname: bool = True,
-                 user: Optional[str] = None, password: Optional[str] = None):
+                 user: Optional[str] = None, password: Optional[str] = None, token: Optional[str] = None):
         """Initialize the client library.
 
         Every connection this client opens (the API socket, dataplanes and log streams) verifies the wsapi
@@ -52,6 +53,9 @@ class clientlib:
             check_hostname: with ``ca_file`` or the system trust store, check the host name (default True).
             user: per-user credential name (from the wsapi credential store).
             password: per-user credential password.
+            token: an API token of a user (``cwt1_...``, wsapi ``CredentialTool token add``), sent as
+                ``Authorization: Bearer``. Tools and automation should use one: a token cannot be guessed, so wsapi never
+                throttles it per user. Not given, and no other credentials: the ``CRESCO_API_TOKEN`` environment variable.
 
         Without ``ca_file`` and ``fingerprint`` the environment variables CRESCO_TLS_FINGERPRINT and
         CRESCO_TLS_CA_FILE apply, then (when verifying) the system trust store (and SSL_CERT_FILE).
@@ -66,7 +70,9 @@ class clientlib:
         self.tls = TrustSettings(verify=verify_ssl, ca_file=ca_file, fingerprint=fingerprint,
                                  check_hostname=check_hostname)
         self.verify_ssl = self.tls.verify
-        self.credentials = Credentials(service_key=service_key, user=user, password=password)
+        if token is None and service_key is None and user is None and password is None:
+            token = os.environ.get(ENV_API_TOKEN) or None             # a tool's token from its environment
+        self.credentials = Credentials(service_key=service_key, user=user, password=password, token=token)
         self._lock = threading.RLock()  # Reentrant lock for thread safety
 
         # Use dictionaries to track resources with identifiers
