@@ -359,3 +359,31 @@ def test_logstreamer_close_closes_its_event_loop(server_cert):
         loop = ls._event_loop
         ls.close()
         assert loop.is_closed()
+
+
+# ---- a refused credential or certificate is not retried every few seconds -------------------------------------
+
+def test_streams_back_off_after_a_refused_credential_or_certificate(server_cert, other_cert):
+    """wsapi locks an address out after repeated failures: a stream that retried a wrong password every 5 s would
+    lock out every client on its host. After a credential, rate-limit or certificate failure it waits a minute."""
+    with WssServer(server_cert, reject_status=401) as srv:
+        dp = dataplane("127.0.0.1", srv.port, "s", None, callback=lambda m: None,
+                       tls=TrustSettings(fingerprint=server_cert.fingerprint()), credentials=Credentials(user="a", password="b"))
+        try:
+            assert not dp.connect()
+            assert dp._permanent_failure_due()
+        finally:
+            dp.close()
+    with WssServer(other_cert) as srv:
+        ls = logstreamer("127.0.0.1", srv.port, "sk", tls=TrustSettings(fingerprint=server_cert.fingerprint()))
+        try:
+            assert not ls.connect()
+            assert ls._permanent_failure_due()
+        finally:
+            ls.close()
+    dp = dataplane("127.0.0.1", 1, "s", "sk", tls=TrustSettings(verify=False))   # nothing listens: a transient failure
+    try:
+        assert not dp.connect()
+        assert not dp._permanent_failure_due()
+    finally:
+        dp.close()
