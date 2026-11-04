@@ -44,7 +44,7 @@ ENV_FINGERPRINT = "CRESCO_TLS_FINGERPRINT"
 ENV_CA_FILE = "CRESCO_TLS_CA_FILE"
 
 #: Whether a connection whose code names no trust setting verifies the certificate (with the system trust store).
-#: True since 1.3.3: such a connection is verified, and against a self-signed wsapi it fails until a pin or CA file is
+#: True since 1.4.0: such a connection is verified, and against a self-signed wsapi it fails until a pin or CA file is
 #: given (fingerprint=, ca_file=, CRESCO_TLS_FINGERPRINT, CRESCO_TLS_CA_FILE). 1.3.2 and earlier did not verify.
 #: An explicit ``verify_ssl=False`` turns verification off and logs a WARNING on every connection.
 VERIFY_BY_DEFAULT = True
