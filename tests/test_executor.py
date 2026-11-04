@@ -145,6 +145,14 @@ def test_a_refusal_raises_with_the_executors_reason(env, refusal, desc):
     assert refusal in str(e.value)
 
 
+def test_a_refusal_at_the_agents_door_is_reported_with_its_status(env):
+    ws, ex = env
+    ws.replies.append(reply(status_code='403', status_desc='unauthorized: write_stdin needs admin or infra (caller api:t/bob[user])'))
+    with pytest.raises(StdinWriteError) as e:
+        ex.write_stdin('R', 'A', 'job-1', 'x', plugin_id='pe')
+    assert e.value.status == '403' and 'needs admin or infra' in str(e.value)
+
+
 def test_a_refusal_midway_reports_what_was_written(env):
     ws, ex = env
     ws.replies.extend([reply(status='10'), reply(status='9', refusal='not-running', status_desc='closed')])
