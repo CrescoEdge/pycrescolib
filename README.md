@@ -187,6 +187,12 @@ All take `(is_rpc, message_event_type, message_payload, ...)` and return the rep
 | `regional_plugin_msgevent(..., dst_agent, dst_plugin)` | a plugin in the local region |
 | `plugin_msgevent(..., dst_plugin)` | a local plugin |
 
+### `filerepo`
+
+| Method | Description |
+|---|---|
+| `stream_file(dst_region, dst_agent, dst_plugin, file_path, dest_path, byte_length, start_byte=0, buffer_size=None, timeout)` | Download a byte range of a file from a filerepo plugin over the dataplane (`streamfile`); written only when every chunk arrived and the SHA-384 in filerepo's terminal frame matches, else `StreamFileError` / `StreamFileException` and nothing is written. Needs `infra` or `admin` on that agent. |
+
 ### dataplane (from `get_dataplane`)
 
 | Method | Description |
@@ -255,6 +261,24 @@ client = clientlib(host, 8282, "service-key", fingerprint=fp)
 
 The user name and password go as HTTP Basic inside TLS. wsapi answers 401 for a bad credential, 403 for a user of
 another tenant, and 429 after repeated failures from one address.
+
+## Dataplane messages and verified file downloads
+
+- A dataplane `MapMessage` (for example the executor's `execution_log` with a process's exit code, and its
+  `delete_exchange`) arrives as a text message holding the JSON object of its entries.
+- No dataplane subscription receives a process's stdin (wsapi narrows every subscription), so a client cannot read what
+  others type into a runner; writing stdin is unchanged (open the stream with `input_id=<stdin_type>`).
+- `filerepo.stream_file` downloads a file from a filerepo plugin over the dataplane and verifies it: filerepo ends every
+  transfer with a terminal frame carrying its status and the SHA-384 of the bytes it sent (through wsapi, a JSON text
+  frame `{"transfer_id", "transfer_end": "true", "transfer_status", "total_bytes", "sha384", ...}`). The chunks are
+  reassembled in order into a private staging file next to the destination, which is moved into place only when every
+  chunk arrived, the byte count is right and the SHA-384 matches.
+
+```python
+r = client.filerepo.stream_file("global-region", "agent-a", repo_plugin_id, "/data/repo/model.bin",
+                                "/tmp/model.bin", byte_length=size)      # size from the repository's file list
+print(r["sha384"])
+```
 
 ## Testing & cross-language parity
 
