@@ -20,7 +20,7 @@ from .globalcontroller import globalcontroller
 from .logstreamer import logstreamer
 from .messaging import messaging_sync as messaging
 from .stunnel import stunnel
-from .tls import ENV_API_TOKEN, Credentials, TrustSettings
+from .tls import ENV_API_TOKEN, ClientCertificate, Credentials, TrustSettings
 from .wc_interface import ws_interface
 
 # Setup logging
@@ -32,7 +32,9 @@ class clientlib:
 
     def __init__(self, host: str, port: int, service_key: Optional[str] = None, verify_ssl: Optional[bool] = None, *,
                  ca_file: Optional[str] = None, fingerprint=None, check_hostname: bool = True,
-                 user: Optional[str] = None, password: Optional[str] = None, token: Optional[str] = None):
+                 user: Optional[str] = None, password: Optional[str] = None, token: Optional[str] = None,
+                 client_cert: Optional[str] = None, client_key: Optional[str] = None,
+                 client_key_password: Optional[str] = None):
         """Initialize the client library.
 
         Every connection this client opens (the API socket, dataplanes and log streams) verifies the wsapi
@@ -56,6 +58,12 @@ class clientlib:
             token: an API token of a user (``cwt1_...``, wsapi ``CredentialTool token add``), sent as
                 ``Authorization: Bearer``. Tools and automation should use one: a token cannot be guessed, so wsapi never
                 throttles it per user. Not given, and no other credentials: the ``CRESCO_API_TOKEN`` environment variable.
+            client_cert: a client certificate every connection presents (mutual TLS): a PEM file (the certificate, then
+                its chain) with ``client_key``, or a PKCS12 file (``.p12``/``.pfx``). wsapi's production profile accepts
+                nothing else; then no other credential is needed. Not given: ``CRESCO_TLS_CLIENT_CERT`` (with
+                ``CRESCO_TLS_CLIENT_KEY`` and ``CRESCO_TLS_CLIENT_KEY_PASSWORD``).
+            client_key: the PEM private key of ``client_cert``.
+            client_key_password: the password of the key or the PKCS12 file, if it has one.
 
         Without ``ca_file`` and ``fingerprint`` the environment variables CRESCO_TLS_FINGERPRINT and
         CRESCO_TLS_CA_FILE apply, then (when verifying) the system trust store (and SSL_CERT_FILE).
@@ -67,12 +75,14 @@ class clientlib:
         self.host = host
         self.port = port
         self.service_key = service_key
+        mine = ClientCertificate(client_cert, client_key, client_key_password) if client_cert else None
         self.tls = TrustSettings(verify=verify_ssl, ca_file=ca_file, fingerprint=fingerprint,
-                                 check_hostname=check_hostname)
+                                 check_hostname=check_hostname, client_cert=mine)
         self.verify_ssl = self.tls.verify
         if token is None and service_key is None and user is None and password is None:
             token = os.environ.get(ENV_API_TOKEN) or None             # a tool's token from its environment
-        self.credentials = Credentials(service_key=service_key, user=user, password=password, token=token)
+        self.credentials = Credentials(service_key=service_key, user=user, password=password, token=token,
+                                       client_certificate=self.tls.client_cert is not None)
         self._lock = threading.RLock()  # Reentrant lock for thread safety
 
         # Use dictionaries to track resources with identifiers
