@@ -12,7 +12,13 @@ import backoff
 from contextlib import asynccontextmanager
 
 from .dataplane import dataplane as _dataplane
-from .tls import Credentials, TrustSettings, connect_websocket
+from .tls import (AuthenticationError, CertificateVerificationError, Credentials, TrustSettings,
+                  connect_websocket)
+
+#: How long a stream waits before reconnecting after wsapi refused its credentials (401/403), rate-limited its address
+#: (429) or presented an untrusted certificate. Retrying every few seconds would only burn wsapi's failure budget for
+#: this address (it locks an address out after repeated failures, which stops every client on the host).
+PERMANENT_FAILURE_RETRY_S = 60.0
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -42,6 +48,7 @@ class logstreamer:
         self._tls = tls if tls is not None else TrustSettings()
         self._credentials = credentials if credentials is not None else Credentials(service_key=service_key)
         self.last_error = None  # why the last connect failed (certificate, credentials, network), or None
+        self._permanent_failure_at = None  # monotonic time of the last credential / certificate failure
         self._event_loop = asyncio.new_event_loop()
         self._thread = None
 
@@ -84,12 +91,20 @@ class logstreamer:
                 logger.error(f"Error in log streamer message handler: {e}")
                 await asyncio.sleep(1)
 
+    def _permanent_failure_due(self) -> bool:
+        """True while the last failure (credentials, rate limit, certificate) is younger than PERMANENT_FAILURE_RETRY_S."""
+        at = self._permanent_failure_at
+        return at is not None and time.monotonic() - at < PERMANENT_FAILURE_RETRY_S
+
     async def _reconnect_monitor(self):
         """Monitor the connection and attempt to reconnect if necessary."""
         await asyncio.sleep(2)
         while self._running:
             try:
                 if not self.isActive or self.ws is None:
+                    if self._permanent_failure_due():
+                        await asyncio.sleep(5)
+                        continue
                     logger.warning("Log streamer connection lost, attempting to reconnect...")
                     self.isActive = False
                     await self._connect()
@@ -131,9 +146,12 @@ class logstreamer:
 
             logger.info("Connected to log streamer")
             self.last_error = None
+            self._permanent_failure_at = None
             return True
         except Exception as e:
             self.last_error = str(e)
+            self._permanent_failure_at = (time.monotonic()
+                                          if isinstance(e, (AuthenticationError, CertificateVerificationError)) else None)
             logger.error(f"Log streamer connection error: {e}")
             return False
 
