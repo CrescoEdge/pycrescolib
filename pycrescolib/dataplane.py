@@ -31,6 +31,26 @@ STATUS_ACTIVE = 10
 STATUS_SUBSCRIPTION_REFUSED = 40
 
 
+def stdin_stream_refusal(stream_name: str) -> Optional[str]:
+    """Why a dataplane stream config would write a process's stdin (None when it does not).
+
+    A JSON config with ``io_type_key`` ``type`` and ``input_id`` ``input`` or ``input-*`` tags every frame it sends as
+    a process's stdin. The executor takes stdin only from its ``write_stdin`` action (:mod:`pycrescolib.executor`) and
+    reads none from the dataplane, and wsapi refuses such a stream, so it is refused here before connecting.
+    """
+    try:
+        cfg = json.loads(stream_name)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(cfg, dict) or cfg.get("io_type_key") != "type":
+        return None
+    t = cfg.get("input_id")
+    if isinstance(t, str) and (t == "input" or t.startswith("input-")):
+        return (f"a process's stdin (type={t}) is not written on the dataplane: "
+                f"use executor.write_stdin (the executor's write_stdin action)")
+    return None
+
+
 class DataplaneSubscriptionRefused(Exception):
     """The broker refused this dataplane subscription (wsapi status 40).
 
@@ -58,6 +78,9 @@ class dataplane:
             tls: how the server certificate is verified (default: verified, see :mod:`pycrescolib.tls`)
             credentials: what the stream authenticates with (default: ``service_key``)
         """
+        refusal = stdin_stream_refusal(stream_name)
+        if refusal is not None:
+            raise ValueError(refusal)
         self.host = host
         self.port = port
         self.stream_name = stream_name

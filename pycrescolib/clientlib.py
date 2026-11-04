@@ -13,6 +13,7 @@ from .admin import admin
 from .agents import agents
 from .api import api
 from .dataplane import dataplane
+from .executor import executor
 from .filerepo import filerepo
 from .globalcontroller import globalcontroller
 from .logstreamer import logstreamer
@@ -83,6 +84,7 @@ class clientlib:
         self.globalcontroller = globalcontroller(self.messaging)
         self.stunnel = stunnel(self.messaging, self.globalcontroller, self.agents)
         self.filerepo = filerepo(self)
+        self.executor = executor(self.messaging, self.globalcontroller)
 
         logger.info(f"Clientlib initialized for {host}:{port} (TLS trust: {self.tls.describe()})")
 
