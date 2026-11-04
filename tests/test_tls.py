@@ -387,3 +387,29 @@ def test_streams_back_off_after_a_refused_credential_or_certificate(server_cert,
         assert not dp._permanent_failure_due()
     finally:
         dp.close()
+
+
+def test_an_operator_pin_or_ca_file_wins_over_verify_ssl_false(server_cert, other_cert, monkeypatch, caplog):
+    monkeypatch.setenv(tls.ENV_FINGERPRINT, server_cert.fingerprint("sha384"))
+    with caplog.at_level(logging.WARNING, logger="pycrescolib.tls"):
+        t = TrustSettings(verify=False)
+    assert t.mode == "fingerprint" and t.verify
+    assert any("overridden" in r.getMessage() for r in caplog.records)
+    with WssServer(server_cert) as srv:
+        c = clientlib("127.0.0.1", srv.port, "sk-test", False)          # GaiaKeep's profile: verify_ssl false
+        try:
+            assert c.connect(), c.last_error
+        finally:
+            c.close()
+    with WssServer(other_cert) as srv:
+        c = clientlib("127.0.0.1", srv.port, "sk-test", False)
+        try:
+            assert not c.connect() and "mismatch" in c.last_error
+        finally:
+            c.close()
+        assert srv.requests == []
+    monkeypatch.delenv(tls.ENV_FINGERPRINT)
+    monkeypatch.setenv(tls.ENV_CA_FILE, server_cert.cert_pem)
+    assert TrustSettings(verify=False).mode == "ca_file"
+    with pytest.raises(TLSConfigError):
+        TrustSettings(verify=False, fingerprint=server_cert.fingerprint())   # the code's own conflict is still refused

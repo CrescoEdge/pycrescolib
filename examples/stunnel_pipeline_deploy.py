@@ -17,10 +17,13 @@ submodule and `globalcontroller.find_plugin` (the reliable, log-free plugin-id
 resolution) instead of hardcoded paths and manual pipeline-node digging.
 
 Usage:
-    python stunnel_pipeline_deploy.py <host> <service_key> <stunnel_jar_path>
+    CRESCO_SERVICE_KEY=... python stunnel_pipeline_deploy.py <host> <stunnel_jar_path>
+    (without CRESCO_SERVICE_KEY the key is asked for on the terminal; it is never taken from the command line,
+    where every local user could read it in ps)
 """
 
 import json
+import os
 import sys
 import time
 
@@ -108,10 +111,14 @@ def teardown(client, stunnel_id, pipeline_id, src_region, src_agent, dst_region,
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print(f"usage: {sys.argv[0]} <host> <service_key> <stunnel_jar_path>")
+    if len(sys.argv) != 3:
+        print(f"usage: CRESCO_SERVICE_KEY=... {sys.argv[0]} <host> <stunnel_jar_path>")
         sys.exit(1)
-    host, service_key, jar_path = sys.argv[1], sys.argv[2], sys.argv[3]
+    host, jar_path = sys.argv[1], sys.argv[2]
+    service_key = os.environ.get("CRESCO_SERVICE_KEY")
+    if not service_key:
+        import getpass
+        service_key = getpass.getpass("wsapi service key: ")
 
     # the wsapi certificate is verified: set CRESCO_TLS_FINGERPRINT (ws.fingerprint) or CRESCO_TLS_CA_FILE (ws.crt.pem)
     client = clientlib(host, 8282, service_key)

@@ -12,7 +12,8 @@ Three ways to trust the wsapi server certificate:
   checked against the certificate unless ``check_hostname=False``.
 * neither: the system trust store (and ``SSL_CERT_FILE``), with host name checking.
 
-``CRESCO_TLS_FINGERPRINT`` and ``CRESCO_TLS_CA_FILE`` in the environment are used when the code names neither.
+``CRESCO_TLS_FINGERPRINT`` and ``CRESCO_TLS_CA_FILE`` in the environment are used when the code names neither, even
+when the code passed ``verify_ssl=False`` (an operator's pin wins, with a WARNING).
 
 ``verify_ssl=False`` turns verification off. Whoever answers then receives the service key or the user's
 password, so every connection made that way logs a WARNING.
@@ -131,11 +132,19 @@ class TrustSettings:
     def __init__(self, verify: Optional[bool] = None, ca_file: Optional[str] = None,
                  fingerprint: Union[None, str, Sequence[str]] = None, check_hostname: bool = True,
                  use_env: bool = True):
-        if verify is not False and use_env and ca_file is None and fingerprint is None:
-            fingerprint = os.environ.get(ENV_FINGERPRINT) or None
-            ca_file = os.environ.get(ENV_CA_FILE) or None
         if verify is False and (ca_file or fingerprint):
             raise TLSConfigError("verify_ssl=False cannot be combined with ca_file or fingerprint")
+        if use_env and ca_file is None and fingerprint is None:
+            env_fp = os.environ.get(ENV_FINGERPRINT) or None
+            env_ca = os.environ.get(ENV_CA_FILE) or None
+            if env_fp or env_ca:
+                if verify is False:
+                    # an operator's pin is never dropped by code that turned verification off (the GaiaKeep profile's
+                    # "verify_ssl": false, for one): the pin wins, and the service key never goes to an impostor
+                    logger.warning(f"verify_ssl=False is overridden: {ENV_FINGERPRINT if env_fp else ENV_CA_FILE} is "
+                                   f"set, so the wsapi certificate is verified against it")
+                    verify = None
+                fingerprint, ca_file = env_fp, env_ca
         # an explicit opt-out warns on every connection; an unverified default (VERIFY_BY_DEFAULT=False) is silent
         self._unspecified = verify is None and not ca_file and not fingerprint
         if verify is None:
