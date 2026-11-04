@@ -18,7 +18,7 @@ Three ways to trust the wsapi server certificate:
 password, so every connection made that way logs a WARNING.
 
 When the code names nothing (no ``verify_ssl``, ``ca_file`` or ``fingerprint``, and no ``CRESCO_TLS_*`` variable),
-:data:`VERIFY_BY_DEFAULT` decides: verify with the system trust store, or (as pycrescolib 1.3.2 and earlier did) do
+the connection is verified with the system trust store (:data:`VERIFY_BY_DEFAULT`); pycrescolib 1.3.2 and earlier did
 not verify.
 
 How a pin is enforced: before anything is sent, a TLS handshake (no data) reads the server certificate and
@@ -44,9 +44,10 @@ ENV_FINGERPRINT = "CRESCO_TLS_FINGERPRINT"
 ENV_CA_FILE = "CRESCO_TLS_CA_FILE"
 
 #: Whether a connection whose code names no trust setting verifies the certificate (with the system trust store).
-#: False keeps the behaviour of 1.3.2 and earlier for such connections (not verified, nothing logged) while the
-#: trust options are rolled out; an explicit ``verify_ssl=False`` always logs a WARNING.
-VERIFY_BY_DEFAULT = False
+#: True since 1.3.3: such a connection is verified, and against a self-signed wsapi it fails until a pin or CA file is
+#: given (fingerprint=, ca_file=, CRESCO_TLS_FINGERPRINT, CRESCO_TLS_CA_FILE). 1.3.2 and earlier did not verify.
+#: An explicit ``verify_ssl=False`` turns verification off and logs a WARNING on every connection.
+VERIFY_BY_DEFAULT = True
 
 _HEX = re.compile(r"^[0-9a-f]+$")
 _DIGESTS = {64: "sha256", 96: "sha384"}
