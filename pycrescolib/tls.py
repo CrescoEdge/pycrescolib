@@ -342,7 +342,7 @@ async def connect_websocket(url: str, host: str, port: int, tls: TrustSettings, 
         if rej is not None:
             status, text = rej
             what = {401: "refused the credentials", 403: "refused this caller",
-                    429: "is refusing attempts from this address after repeated failures"}.get(status, "refused the upgrade")
+                    429: "refused this connection for now"}.get(status, "refused the upgrade")
             raise AuthenticationError(f"wsapi at {host}:{port} {what} (HTTP {status}"
                                       f"{': ' + text if text else ''}) for {credentials!r}", status) from e
         raise
