@@ -113,7 +113,8 @@ if __name__ == "__main__":
         sys.exit(1)
     host, service_key, jar_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    client = clientlib(host, 8282, service_key, verify_ssl=False)
+    # the wsapi certificate is verified: set CRESCO_TLS_FINGERPRINT (ws.fingerprint) or CRESCO_TLS_CA_FILE (ws.crt.pem)
+    client = clientlib(host, 8282, service_key)
     if not client.connect():
         print("failed to connect")
         sys.exit(1)

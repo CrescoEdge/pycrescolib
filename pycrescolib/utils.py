@@ -175,22 +175,15 @@ def read_file_bytes(file_path: str) -> bytes:
         logger.error(f"Error reading file {file_path}: {e}")
         raise
 
-def validate_ssl_config(verify: bool = False) -> None:
-    """Configure SSL verification.
-    
+def validate_ssl_config(verify: bool = True) -> None:
+    """Formerly disabled certificate verification for the WHOLE process (it replaced Python's default HTTPS
+    context with an unverified one when called with its old default, verify=False). That is no longer done:
+    certificate verification is configured per connection (see :mod:`pycrescolib.tls`), and this function
+    changes nothing.
+
     Args:
-        verify: Whether to verify SSL certificates
+        verify: ignored
     """
-    import ssl
-    
     if not verify:
-        try:
-            # Create unverified context
-            _unverified_context = ssl._create_unverified_context()
-            
-            # Apply globally
-            ssl._create_default_https_context = lambda: _unverified_context
-            
-            logger.warning("SSL certificate verification disabled")
-        except AttributeError:
-            logger.warning("Could not configure SSL verification settings")
+        logger.warning("validate_ssl_config(verify=False) no longer disables certificate verification process-wide; "
+                       "use clientlib(..., verify_ssl=False) for one client if you must")
