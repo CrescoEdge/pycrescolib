@@ -357,33 +357,56 @@ async def connect_websocket(url: str, host: str, port: int, tls: TrustSettings, 
 _USER = re.compile(r"^[A-Za-z0-9._@-]{1,128}$")
 
 
-class Credentials:
-    """What a connection authenticates with: a per-user name and password, or the wsapi service key.
+#: An API token (wsapi CredentialTool token add): cwt1_<16 hex id>.<43 base64url characters>
+_TOKEN = re.compile(r"cwt1_[0-9a-f]{16}\.[A-Za-z0-9_-]{43}")
 
-    A user name and password go as HTTP Basic (``Authorization`` header, protected by TLS); the legacy service
-    key goes in the ``cresco_service_key`` header. ``repr`` never shows the secret.
+#: The environment variable a tool can hand its API token in (instead of code or the command line)
+ENV_API_TOKEN = "CRESCO_API_TOKEN"
+
+
+class Credentials:
+    """What a connection authenticates with: an API token, a per-user name and password, or the wsapi service key.
+
+    An API token (``cwt1_...``, made with wsapi's ``CredentialTool token add``) goes as ``Authorization: Bearer``; it
+    acts as its user, cannot be guessed, and so is never throttled per user: tools and automation should use one. A
+    user name and password go as HTTP Basic (``Authorization`` header, protected by TLS); the legacy service key goes in
+    the ``cresco_service_key`` header. ``repr`` never shows the secret.
     """
 
     def __init__(self, service_key: Optional[str] = None, user: Optional[str] = None,
-                 password: Optional[str] = None):
-        if user is not None or password is not None:
+                 password: Optional[str] = None, token: Optional[str] = None):
+        given = sum(1 for g in (service_key, token, user or password) if g)
+        if given > 1:
+            raise ValueError("give one of token, service_key, or user and password")
+        if token is not None:
+            if not _TOKEN.fullmatch(token):
+                raise ValueError("an API token looks like cwt1_<16 hex>.<43 base64url characters>")
+        elif user is not None or password is not None:
             if not user or not password:
                 raise ValueError("per-user credentials need both user and password")
             if not _USER.match(user):
                 raise ValueError("user names are 1-128 characters from A-Z a-z 0-9 . _ @ -")
-            if service_key:
-                raise ValueError("give either service_key or user/password, not both")
         elif not service_key:
-            raise ValueError("credentials needed: service_key, or user and password")
+            raise ValueError("credentials needed: token, service_key, or user and password")
         self.user = user
         self._password = password
         self._service_key = service_key
+        self._token = token
+
+    @property
+    def token_id(self) -> Optional[str]:
+        """The API token's id (not secret), or None."""
+        return self._token[5:21] if self._token else None
 
     def headers(self) -> dict:
+        if self._token is not None:
+            return {"Authorization": "Bearer " + self._token}
         if self.user is not None:
             token = base64.b64encode(f"{self.user}:{self._password}".encode("utf-8")).decode("ascii")
             return {"Authorization": "Basic " + token}
         return {"cresco_service_key": self._service_key}
 
     def __repr__(self) -> str:
+        if self._token is not None:
+            return f"Credentials(token={self.token_id}...)"
         return f"Credentials(user={self.user!r})" if self.user else "Credentials(service_key=***)"

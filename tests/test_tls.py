@@ -415,3 +415,35 @@ def test_an_operator_pin_or_ca_file_wins_over_verify_ssl_false(server_cert, othe
     assert TrustSettings(verify=False).mode == "ca_file"
     with pytest.raises(TLSConfigError):
         TrustSettings(verify=False, fingerprint=server_cert.fingerprint())   # the code's own conflict is still refused
+
+
+# ---- API tokens (wsapi round 3) -------------------------------------------------------------------------------
+
+def _tok():
+    return "cwt1_" + "0123456789abcdef" + "." + "Q" * 43
+
+
+def test_an_api_token_goes_as_bearer_and_never_shows(server_cert):
+    presented = _tok()
+    creds = Credentials(token=presented)
+    assert creds.headers() == {"Authorization": "Bearer " + presented}
+    assert presented[22:] not in repr(creds) and "0123456789abcdef" in repr(creds)
+    with WssServer(server_cert) as srv:
+        _open(srv, TrustSettings(fingerprint=server_cert.fingerprint()), creds)
+        assert srv.requests[0]["authorization"] == "Bearer " + presented
+        assert "cresco_service_key" not in srv.requests[0]
+
+
+@pytest.mark.parametrize("kw", [{"token": "cwt1_short"}, {"token": _tok(), "service_key": "k"},
+                                {"token": _tok(), "user": "a", "password": "p"}])
+def test_bad_token_combinations_are_refused(kw):
+    with pytest.raises(ValueError):
+        Credentials(**kw)
+
+
+def test_a_tool_takes_its_token_from_the_environment(monkeypatch, server_cert):
+    monkeypatch.setenv("CRESCO_API_TOKEN", _tok())
+    c = clientlib("127.0.0.1", 1, fingerprint=server_cert.fingerprint())
+    assert c.credentials.headers()["Authorization"] == "Bearer " + _tok()
+    c2 = clientlib("127.0.0.1", 1, "sk-test", fingerprint=server_cert.fingerprint())
+    assert "cresco_service_key" in c2.credentials.headers(), "explicit credentials win over the environment"
