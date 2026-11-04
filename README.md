@@ -290,7 +290,14 @@ client = clientlib(host, 8282, "service-key", fingerprint=fp)
 **Tools and automation (GaiaKeep included) should use an API token.** `CredentialTool token add <ws.users> <user>
 [--expires-days N] [--label L]` on the agent prints it once (`cwt1_...`); it acts as its user, goes as
 `Authorization: Bearer` inside TLS, and is revoked with `token revoke`. It has 256 random bits, so wsapi never throttles
-it per user: strangers guessing the user's password delay password logins from new places, never a tool's token.
+it per user: strangers guessing the user's password delay password logins from strangers' networks, never a tool's
+token. (Someone sharing your network or NAT can delay password logins from your addresses that are not yet known good;
+tokens are not affected, so use one there too.)
+**Revocation reaches open connections.** When a token is revoked or expires, or its user is removed, or a user's
+password, role or grants change, wsapi closes that credential's open connections (API, dataplane, log stream) within
+about 2 s, with WebSocket 1008 `credentials revoked or changed: authenticate again`. The next call on the client raises
+`ConnectionError` naming that reason; a dataplane or log stream reconnects, and a revoked credential's reconnect is
+refused (401) and retried once a minute.
 The user name and password go as HTTP Basic inside TLS. wsapi answers 401 for a bad credential, 403 for a user of
 another tenant, and 429 after repeated failures from one address. After such a refusal (or an untrusted certificate)
 a dataplane or log stream retries once a minute, not every few seconds, so it does not lock out its host.
