@@ -138,8 +138,9 @@ class executor(CrescoMessageBase):
             reply = self.messaging.global_plugin_msgevent(True, 'EXEC', payload, region, agent, pid, timeout=timeout)
             reply = reply if isinstance(reply, dict) else {}
             if reply.get('status') != STATUS_WRITTEN:
-                raise StdinWriteError(stream_name, reply.get('status'), reply.get('refusal'), reply.get('status_desc'),
-                                      written)
+                # the executor answers status/refusal; the agent's action authorization, before it, status_code 403
+                raise StdinWriteError(stream_name, reply.get('status') or reply.get('status_code'), reply.get('refusal'),
+                                      reply.get('status_desc'), written)
             written += len(chunk)
         logger.debug("write_stdin: %d byte(s) to %s", written, stream_name)
         return written
