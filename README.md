@@ -244,7 +244,9 @@ server presented (...)`), and so do `dataplane.last_error` / `logstreamer.last_e
 with `.status`), `TLSConfigError`.
 
 `verify_ssl=False` turns verification off. The credentials then go to whoever answers, so every connection made that
-way logs a WARNING. It cannot be combined with `ca_file` or `fingerprint`. (It no longer turns off HTTPS verification
+way logs a WARNING. It cannot be combined with `ca_file` or `fingerprint`, and it never drops an operator's pin: with
+`CRESCO_TLS_FINGERPRINT` or `CRESCO_TLS_CA_FILE` set, the certificate is verified against it anyway (WARNING
+"verify_ssl=False is overridden"). (It no longer turns off HTTPS verification
 for the whole Python process, as 1.3.2 and earlier did.)
 
 
