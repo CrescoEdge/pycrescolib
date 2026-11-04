@@ -142,7 +142,7 @@ def test_the_host_name_is_checked_with_a_ca_file():
 def test_the_system_store_does_not_trust_a_self_signed_wsapi(server_cert):
     with WssServer(server_cert) as srv:
         with pytest.raises(CertificateVerificationError) as e:
-            _open(srv, TrustSettings())
+            _open(srv, TrustSettings(verify=True))
         assert srv.requests == []
     assert "fingerprint=" in str(e.value)
 
@@ -210,11 +210,39 @@ def test_client_against_a_mismatched_server_fails_and_says_why(server_cert, othe
         assert srv.requests == []
 
 
-def test_client_defaults_to_verification(server_cert):
-    with WssServer(server_cert) as srv:
+def test_client_without_a_trust_setting_follows_the_default(server_cert, caplog):
+    """Until the default flips (tls.VERIFY_BY_DEFAULT), a client that names no trust setting is not verified and
+    logs nothing, as in 1.3.2; when it flips, the same client verifies against the system store."""
+    with WssServer(server_cert) as srv, caplog.at_level(logging.WARNING, logger="pycrescolib.tls"):
         c = clientlib("127.0.0.1", srv.port, "sk-test")
         try:
+            if tls.VERIFY_BY_DEFAULT:
+                assert c.tls.mode == "system" and not c.connect()
+                assert srv.requests == []
+            else:
+                assert c.tls.mode == "insecure" and c.connect()
+                assert not [r for r in caplog.records if "DISABLED" in r.getMessage()], "the unverified default is silent"
+        finally:
+            c.close()
+
+
+def test_verify_ssl_true_uses_the_system_store(server_cert):
+    with WssServer(server_cert) as srv:
+        c = clientlib("127.0.0.1", srv.port, "sk-test", True)
+        try:
             assert c.tls.mode == "system" and not c.connect()
+            assert "not trusted" in c.last_error
+        finally:
+            c.close()
+        assert srv.requests == []
+
+
+def test_a_trust_setting_alone_turns_verification_on(server_cert, other_cert, monkeypatch):
+    monkeypatch.setenv(tls.ENV_FINGERPRINT, server_cert.fingerprint())
+    with WssServer(other_cert) as srv:
+        c = clientlib("127.0.0.1", srv.port, "sk-test")
+        try:
+            assert c.tls.mode == "fingerprint" and not c.connect()
         finally:
             c.close()
         assert srv.requests == []
@@ -262,14 +290,19 @@ def test_dataplane_pinned_connects_and_mismatch_is_refused(server_cert, other_ce
         assert srv.requests == []
 
 
-def test_dataplane_defaults_to_verification(server_cert):
+def test_dataplane_verifies_with_verify_true_or_the_flipped_default(server_cert):
     with WssServer(server_cert) as srv:
-        dp = dataplane("127.0.0.1", srv.port, "s", "sk-test")
+        dp = dataplane("127.0.0.1", srv.port, "s", "sk-test", tls=TrustSettings(verify=True))
         try:
             assert not dp.connect() and "not trusted" in dp.last_error
         finally:
             dp.close()
         assert srv.requests == []
+        dp = dataplane("127.0.0.1", srv.port, "s", "sk-test")
+        try:
+            assert dp.connect() != tls.VERIFY_BY_DEFAULT
+        finally:
+            dp.close()
 
 
 def test_logstreamer_pinned_connects_and_mismatch_is_refused(server_cert, other_cert):

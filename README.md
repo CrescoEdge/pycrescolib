@@ -23,7 +23,7 @@ From a source checkout use `pip install .`, and to build the distributions run `
 from pycrescolib.clientlib import clientlib
 
 # host/ip of an agent running the wsapi plugin, its port, the wsapi service key, and the wsapi certificate's
-# fingerprint (from ws.fingerprint in the wsapi plugin data directory, or the agent log)
+# fingerprint (from ws.fingerprint in the wsapi plugin data directory, or the agent log), which turns on verification
 client = clientlib("localhost", 8282, "your-service-key", fingerprint="sha384:AB:CD:...")
 
 if client.connect():
@@ -65,7 +65,7 @@ Signatures are shown language-neutrally; names and behavior are identical in bot
 
 | Method | Description |
 |---|---|
-| `clientlib(host, port, service_key=None, verify_ssl=True, *, ca_file=None, fingerprint=None, check_hostname=True, user=None, password=None)` | Create the client for a wsapi endpoint (see [Security](#security-tls-trust-and-credentials)). |
+| `clientlib(host, port, service_key=None, verify_ssl=None, *, ca_file=None, fingerprint=None, check_hostname=True, user=None, password=None)` | Create the client for a wsapi endpoint (see [Security](#security-tls-trust-and-credentials)). |
 | `connect(block_on_connect=True) -> bool` | Connect to the wsapi endpoint; block until connected when `block_on_connect`. |
 | `connected() -> bool` | Return True if connected to the wsapi endpoint. |
 | `close() -> bool` | Close the client connection and all managed streams. |
@@ -214,8 +214,8 @@ All take `(is_rpc, message_event_type, message_payload, ...)` and return the rep
 
 ## Security: TLS trust and credentials
 
-Every connection the client opens (the API socket, every dataplane and every log stream) verifies the wsapi server
-certificate before it sends anything, and authenticates with the same credentials.
+Every connection the client opens (the API socket, every dataplane and every log stream) uses the same trust setting
+and the same credentials. With a trust setting, the wsapi server certificate is verified before anything is sent.
 
 **Trusting the wsapi certificate.** wsapi makes its own certificate and publishes it in its plugin data directory on
 the agent (`<agent data>/plugin-data/<wsapi plugin id>/`): `ws.fingerprint` holds its SHA-384 and SHA-256
@@ -229,7 +229,8 @@ client = clientlib(host, 8282, key, ca_file="/path/to/ws.crt.pem")    # or trust
 or set `CRESCO_TLS_FINGERPRINT` or `CRESCO_TLS_CA_FILE` in the environment and change no code. Several pins (a list or a
 comma-separated string) allow a certificate rotation. With `ca_file` the host name is checked (wsapi's certificate
 names `localhost`, the agent's host names and addresses and `wsapi_tls_san`); pass `check_hostname=False` to skip
-that. With neither, the system trust store (and `SSL_CERT_FILE`) applies, which does not trust a self-signed wsapi.
+that. `verify_ssl=True` with neither uses the system trust store (and `SSL_CERT_FILE`), which does not trust a
+self-signed wsapi.
 
 A server that does not match gets nothing: no service key, no password. `connect()` returns False, `client.last_error`
 says why (`wsapi certificate mismatch for host:port: the pinned fingerprint ... does not match the certificate the
@@ -238,7 +239,12 @@ server presented (...)`), and so do `dataplane.last_error` / `logstreamer.last_e
 with `.status`), `TLSConfigError`.
 
 `verify_ssl=False` turns verification off. The credentials then go to whoever answers, so every connection made that
-way logs a WARNING. It cannot be combined with `ca_file` or `fingerprint`.
+way logs a WARNING. It cannot be combined with `ca_file` or `fingerprint`. (It no longer turns off HTTPS verification
+for the whole Python process, as 1.3.2 and earlier did.)
+
+A client that names no trust setting at all (no `verify_ssl`, `ca_file` or `fingerprint`, and no `CRESCO_TLS_*`
+variable) is, for now, not verified, as in 1.3.2 (`pycrescolib.tls.VERIFY_BY_DEFAULT` is False). Set a trust setting
+now: verification will become the default.
 
 **Credentials.** A per-user credential (created on the agent with wsapi's `CredentialTool`) or the legacy service key:
 
@@ -249,17 +255,6 @@ client = clientlib(host, 8282, "service-key", fingerprint=fp)
 
 The user name and password go as HTTP Basic inside TLS. wsapi answers 401 for a bad credential, 403 for a user of
 another tenant, and 429 after repeated failures from one address.
-
-**Upgrading from 1.3.2 or earlier.** Since 1.3.3 verification is on by default and covers the dataplane and log
-streams too (they never verified before, and earlier versions also turned off HTTPS verification for the whole Python
-process when `verify_ssl=False`; no longer). A client that passed `verify_ssl=False` keeps working, with a WARNING. A
-client that passed nothing (or `verify_ssl=True`) needs one of:
-
-1. on the agent, read the fingerprint: `cat <agent data>/plugin-data/<wsapi plugin id>/ws.fingerprint`;
-2. on the client, `export CRESCO_TLS_FINGERPRINT=sha384:...` (or pass `fingerprint=`, or copy `ws.crt.pem` and use
-   `ca_file=` / `CRESCO_TLS_CA_FILE`).
-
-GaiaKeep's `CrescoTransport(host, port, service_key)` needs only step 2.
 
 ## Testing & cross-language parity
 

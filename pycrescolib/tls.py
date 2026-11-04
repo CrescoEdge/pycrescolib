@@ -1,7 +1,7 @@
 """
 TLS trust and credentials for every pycrescolib connection: the API socket, dataplane streams and log streams.
 
-The wsapi server certificate is verified by default. Three ways to trust it:
+Three ways to trust the wsapi server certificate:
 
 * ``fingerprint=``: pin the certificate. wsapi logs its fingerprints at start and writes them to
   ``<agent data>/plugin-data/<wsapi plugin id>/ws.fingerprint``. A SHA-256 (64 hex digits) or SHA-384 (96 hex
@@ -16,6 +16,10 @@ The wsapi server certificate is verified by default. Three ways to trust it:
 
 ``verify_ssl=False`` turns verification off. Whoever answers then receives the service key or the user's
 password, so every connection made that way logs a WARNING.
+
+When the code names nothing (no ``verify_ssl``, ``ca_file`` or ``fingerprint``, and no ``CRESCO_TLS_*`` variable),
+:data:`VERIFY_BY_DEFAULT` decides: verify with the system trust store, or (as pycrescolib 1.3.2 and earlier did) do
+not verify.
 
 How a pin is enforced: before anything is sent, a TLS handshake (no data) reads the server certificate and
 compares its fingerprint with the pin; a mismatch raises :class:`CertificateMismatch` and no credential leaves
@@ -38,6 +42,11 @@ logger = logging.getLogger(__name__)
 
 ENV_FINGERPRINT = "CRESCO_TLS_FINGERPRINT"
 ENV_CA_FILE = "CRESCO_TLS_CA_FILE"
+
+#: Whether a connection whose code names no trust setting verifies the certificate (with the system trust store).
+#: False keeps the behaviour of 1.3.2 and earlier for such connections (not verified, nothing logged) while the
+#: trust options are rolled out; an explicit ``verify_ssl=False`` always logs a WARNING.
+VERIFY_BY_DEFAULT = False
 
 _HEX = re.compile(r"^[0-9a-f]+$")
 _DIGESTS = {64: "sha256", 96: "sha384"}
@@ -108,7 +117,9 @@ class TrustSettings:
     """How a connection decides whether the wsapi server certificate is trusted.
 
     Args:
-        verify: False turns verification off (a WARNING on every connection).
+        verify: True verifies (with ``ca_file``, ``fingerprint``, the ``CRESCO_TLS_*`` environment or the system
+            trust store); False turns verification off (a WARNING on every connection); None (the default) verifies
+            when a trust setting is given and otherwise follows :data:`VERIFY_BY_DEFAULT`.
         ca_file: PEM file of trusted certificates.
         fingerprint: pinned certificate fingerprint(s) (SHA-256 or SHA-384).
         check_hostname: with ``ca_file`` or the system trust store, check the host name (default True). A pin
@@ -116,14 +127,18 @@ class TrustSettings:
         use_env: fall back to ``CRESCO_TLS_FINGERPRINT`` / ``CRESCO_TLS_CA_FILE`` when neither is given.
     """
 
-    def __init__(self, verify: bool = True, ca_file: Optional[str] = None,
+    def __init__(self, verify: Optional[bool] = None, ca_file: Optional[str] = None,
                  fingerprint: Union[None, str, Sequence[str]] = None, check_hostname: bool = True,
                  use_env: bool = True):
-        if verify and use_env and ca_file is None and fingerprint is None:
+        if verify is not False and use_env and ca_file is None and fingerprint is None:
             fingerprint = os.environ.get(ENV_FINGERPRINT) or None
             ca_file = os.environ.get(ENV_CA_FILE) or None
-        if not verify and (ca_file or fingerprint):
+        if verify is False and (ca_file or fingerprint):
             raise TLSConfigError("verify_ssl=False cannot be combined with ca_file or fingerprint")
+        # an explicit opt-out warns on every connection; an unverified default (VERIFY_BY_DEFAULT=False) is silent
+        self._unspecified = verify is None and not ca_file and not fingerprint
+        if verify is None:
+            verify = True if (ca_file or fingerprint) else VERIFY_BY_DEFAULT
         self.verify = bool(verify)
         self.ca_file = ca_file
         self.pins = _parse_pins(fingerprint)
@@ -151,6 +166,8 @@ class TrustSettings:
             return "pinned " + ", ".join(f"{a}:{h[:16]}..." for a, h in self.pins)
         if self.mode == "ca_file":
             return f"CA file {self.ca_file}"
+        if self.mode == "insecure" and self._unspecified:
+            return "not verified (no trust setting given)"
         return self.mode
 
     def matches(self, der: bytes) -> bool:
@@ -172,6 +189,11 @@ class TrustSettings:
             CertificateMismatch: the server certificate does not match the pin.
             CertificateVerificationError: the certificate could not be read for the pin check.
         """
+        if self.mode == "insecure" and self._unspecified:
+            ctx = self._base_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            return ctx
         if self.mode == "insecure":
             logger.warning(
                 f"TLS certificate verification is DISABLED for {url} (verify_ssl=False): the credentials go to "
