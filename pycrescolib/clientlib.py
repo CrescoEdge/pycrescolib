@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from .admin import admin
 from .agents import agents
 from .api import api
-from .dataplane import dataplane
+from .dataplane import dataplane, with_envelope
 from .executor import executor
 from .filerepo import filerepo
 from .globalcontroller import globalcontroller
@@ -140,17 +140,22 @@ class clientlib:
             return False
 
     def get_dataplane(self, stream_name: str, callback: Optional[Callable] = None,
-                      binary_callback: Optional[Callable] = None) -> dataplane:
+                      binary_callback: Optional[Callable] = None, envelope: bool = False) -> dataplane:
         """Create or retrieve a dataplane instance for streaming data.
 
         Args:
             stream_name: Name of the stream (acts as an identifier)
             callback: Function for text messages
             binary_callback: Function for binary messages
+            envelope: ask wsapi for envelope frames (a JSON stream config only): the callbacks then receive
+                :class:`pycrescolib.dataplane.Envelope` objects naming each message's verified writer, so a client can
+                tell, say, a process's real ``execution_log`` (written by the executor) from a user's look-alike text
 
         Returns:
             Dataplane instance
         """
+        if envelope:
+            stream_name = with_envelope(stream_name)
         with self._lock:
             # Check if we already have a dataplane with this stream name
             if stream_name in self._dataplanes:

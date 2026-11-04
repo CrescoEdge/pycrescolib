@@ -70,7 +70,7 @@ Signatures are shown language-neutrally; names and behavior are identical in bot
 | `connected() -> bool` | Return True if connected to the wsapi endpoint. |
 | `close() -> bool` | Close the client connection and all managed streams. |
 | `connection()` | Return the underlying websocket transport interface. |
-| `get_dataplane(stream_name, callback=None)` | Get (and register) a dataplane for the given stream query. |
+| `get_dataplane(stream_name, callback=None, binary_callback=None, envelope=False)` | Get (and register) a dataplane for the given stream query; `envelope=True` (a JSON stream config) hands the callbacks `Envelope` objects naming each message's verified writer. |
 | `close_dataplane(stream_name) -> bool` | Close and deregister the named dataplane. |
 | `get_active_dataplanes() -> list` | List names of currently registered dataplanes. |
 | `get_logstreamer(name=None, callback=None)` | Get (and register) a logstreamer. |
@@ -308,6 +308,23 @@ wsapi until it does. Nothing is sent to the server in the meantime; `last_error`
 - PyPI: this is version **1.4.0** (a minor version, not 1.3.3, because the default changed incompatibly); it is published after the merge to main.
 
 ## Dataplane messages and verified file downloads
+
+- **Who wrote a message.** `get_dataplane(config, callback, binary_callback, envelope=True)` (a JSON stream config) asks
+  wsapi for envelope frames: both callbacks then receive `pycrescolib.dataplane.Envelope(kind, writer, writer_roles,
+  writer_tenant, properties, text | map | data)`. `writer` is `api:<tenant>/<user>` when an API client wrote it through
+  wsapi (`envelope.from_api_user`), else the bundle or controller that published it, as its controller stamped it
+  (`plugin:<tenant>/<region>/<agent>/<plugin id>`, `controller:<tenant>/<region>/<agent>`); None, and
+  `kind == "raw"`, when the frame carries no verified writer. A client that acts on events (an exit code, a transfer's
+  end) checks the writer, since any member of the stream can send text that looks like one:
+
+  ```python
+  ex = client.executor.find_plugin("global-region", "agent-a")
+  def on(e):
+      if e.kind == "map" and e.map.get("cmd") == "execution_log" \
+              and (e.writer or "").endswith(f"/global-region/agent-a/{ex}"):
+          ...                                       # the executor's own exit event
+  dp = client.get_dataplane(json.dumps({"ident_key": "stream_name", "ident_id": "job-1"}), on, envelope=True)
+  ```
 
 - A dataplane `MapMessage` (for example the executor's `execution_log` with a process's exit code, and its
   `delete_exchange`) arrives as a text message holding the JSON object of its entries.
