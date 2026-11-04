@@ -174,6 +174,8 @@ def test_a_refused_credential_is_a_typed_error(server_cert, status):
         with pytest.raises(AuthenticationError) as e:
             _open(srv, TrustSettings(fingerprint=server_cert.fingerprint()), Credentials(user="alice", password="x"))
     assert e.value.status == status and "alice" in str(e.value) and "x'" not in str(e.value)
+    assert "authentication failed" in str(e.value), "the server's own reason is quoted"
+    assert "repeated failures" not in str(e.value), "a 429 is not always a lockout (it may be the per-user connection cap)"
 
 
 @pytest.mark.parametrize("kw", [{}, {"user": "a"}, {"password": "p"}, {"service_key": "k", "user": "a", "password": "p"},
