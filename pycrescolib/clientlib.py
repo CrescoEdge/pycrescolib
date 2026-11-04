@@ -13,6 +13,7 @@ from .admin import admin
 from .agents import agents
 from .api import api
 from .dataplane import dataplane
+from .filerepo import filerepo
 from .globalcontroller import globalcontroller
 from .logstreamer import logstreamer
 from .messaging import messaging_sync as messaging
@@ -81,6 +82,7 @@ class clientlib:
         self.api = api(self.messaging)
         self.globalcontroller = globalcontroller(self.messaging)
         self.stunnel = stunnel(self.messaging, self.globalcontroller, self.agents)
+        self.filerepo = filerepo(self)
 
         logger.info(f"Clientlib initialized for {host}:{port} (TLS trust: {self.tls.describe()})")
 
