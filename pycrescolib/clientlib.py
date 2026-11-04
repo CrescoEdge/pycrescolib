@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class clientlib:
     """Client library for interacting with Cresco framework."""
 
-    def __init__(self, host: str, port: int, service_key: Optional[str] = None, verify_ssl: bool = True, *,
+    def __init__(self, host: str, port: int, service_key: Optional[str] = None, verify_ssl: Optional[bool] = None, *,
                  ca_file: Optional[str] = None, fingerprint=None, check_hostname: bool = True,
                  user: Optional[str] = None, password: Optional[str] = None):
         """Initialize the client library.
@@ -40,8 +40,10 @@ class clientlib:
             port: Port number
             service_key: the wsapi service key (an admin of the agent's tenant). Omit it when giving
                 ``user`` and ``password``.
-            verify_ssl: verify the server certificate (default True). False turns verification off: the
-                credentials then go to whoever answers, and every connection logs a WARNING.
+            verify_ssl: True verifies the server certificate; False turns verification off (the credentials then
+                go to whoever answers, and every connection logs a WARNING). Not given: verified when ``ca_file``,
+                ``fingerprint`` or a ``CRESCO_TLS_*`` variable is set, otherwise per
+                :data:`pycrescolib.tls.VERIFY_BY_DEFAULT`.
             ca_file: PEM file of trusted certificates (the wsapi writes its own certificate to ws.crt.pem).
             fingerprint: pinned SHA-256 or SHA-384 fingerprint of the wsapi certificate (from ws.fingerprint),
                 or a list / comma-separated string of them.
@@ -50,7 +52,7 @@ class clientlib:
             password: per-user credential password.
 
         Without ``ca_file`` and ``fingerprint`` the environment variables CRESCO_TLS_FINGERPRINT and
-        CRESCO_TLS_CA_FILE apply, then the system trust store (and SSL_CERT_FILE).
+        CRESCO_TLS_CA_FILE apply, then (when verifying) the system trust store (and SSL_CERT_FILE).
 
         Raises:
             pycrescolib.tls.TLSConfigError: unusable trust settings
@@ -59,9 +61,9 @@ class clientlib:
         self.host = host
         self.port = port
         self.service_key = service_key
-        self.verify_ssl = verify_ssl
         self.tls = TrustSettings(verify=verify_ssl, ca_file=ca_file, fingerprint=fingerprint,
                                  check_hostname=check_hostname)
+        self.verify_ssl = self.tls.verify
         self.credentials = Credentials(service_key=service_key, user=user, password=password)
         self._lock = threading.RLock()  # Reentrant lock for thread safety
 
