@@ -86,15 +86,20 @@ class WssServer:
     ({"status_code": "10"}). ``reject_status`` answers every upgrade with that HTTP status instead.
     """
 
-    def __init__(self, cert: Cert, reject_status=None, chain_pem=None):
+    def __init__(self, cert: Cert, reject_status=None, chain_pem=None, client_ca=None):
         self.cert = cert
         self.requests = []          # one dict of headers per HTTP upgrade request received
+        self.client_certs = []      # the client certificate (DER) of each upgrade request, when one was presented
         self.reject_status = reject_status
         self._ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         if chain_pem:
             self._ctx.load_cert_chain(chain_pem, cert.key_pem)
         else:
             self._ctx.load_cert_chain(cert.cert_pem, cert.key_pem)
+        if client_ca:
+            # like wsapi's production profile: a client certificate from this CA is required on every connection
+            self._ctx.verify_mode = ssl.CERT_REQUIRED
+            self._ctx.load_verify_locations(client_ca)
         self._loop = asyncio.new_event_loop()
         self._ready = threading.Event()
         self._stop = None
@@ -112,6 +117,10 @@ class WssServer:
 
     def _process_request(self, connection, request):
         self.requests.append({k.lower(): v for k, v in request.headers.raw_items()})
+        sslobj = connection.transport.get_extra_info("ssl_object")
+        der = sslobj.getpeercert(binary_form=True) if sslobj is not None else None
+        if der:
+            self.client_certs.append(der)
         if self.reject_status:
             return Response(self.reject_status, "refused", Headers([("Content-Type", "text/plain")]),
                             b"authentication failed")

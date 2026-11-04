@@ -65,7 +65,7 @@ Signatures are shown language-neutrally; names and behavior are identical in bot
 
 | Method | Description |
 |---|---|
-| `clientlib(host, port, service_key=None, verify_ssl=None, *, ca_file=None, fingerprint=None, check_hostname=True, user=None, password=None, token=None)` | Create the client for a wsapi endpoint (see [Security](#security-tls-trust-and-credentials)). |
+| `clientlib(host, port, service_key=None, verify_ssl=None, *, ca_file=None, fingerprint=None, check_hostname=True, user=None, password=None, token=None, client_cert=None, client_key=None, client_key_password=None)` | Create the client for a wsapi endpoint (see [Security](#security-tls-trust-and-credentials)). |
 | `connect(block_on_connect=True) -> bool` | Connect to the wsapi endpoint; block until connected when `block_on_connect`. |
 | `connected() -> bool` | Return True if connected to the wsapi endpoint. |
 | `close() -> bool` | Close the client connection and all managed streams. |
@@ -293,6 +293,23 @@ client = clientlib(host, 8282, "service-key", fingerprint=fp)
 it per user: strangers guessing the user's password delay password logins from strangers' networks, never a tool's
 token. (Someone sharing your network or NAT can delay password logins from your addresses that are not yet known good;
 tokens are not affected, so use one there too.)
+**Client certificates (mutual TLS); the production profile.** An agent whose wsapi runs with
+`security_profile=production` accepts nothing but a client certificate issued by its operator's client CA, which names
+the caller (`cresco:api:<tenant>/<user>` and `cresco:role:<admin|user>` subject alternative names); passwords, the service
+key and (unless the agent allows them) API tokens are refused. Every connection (API, dataplane, log stream, and the
+pin check's handshake) presents it:
+
+```python
+client = clientlib(host, 8282, fingerprint=fp, client_cert="gaiakeep.pem", client_key="gaiakeep.key")   # PEM: cert (+ chain), key
+client = clientlib(host, 8282, fingerprint=fp, client_cert="gaiakeep.p12", client_key_password="...")    # or PKCS12
+```
+
+or `CRESCO_TLS_CLIENT_CERT`, `CRESCO_TLS_CLIENT_KEY` and `CRESCO_TLS_CLIENT_KEY_PASSWORD` in the environment. With a
+client certificate and no other credential, nothing else is sent; a token (`token=` or `CRESCO_API_TOKEN`) goes over it
+where the agent allows tokens. The files are read once, when the client is made (a wrong password or a key that is not
+the certificate's raises `TLSConfigError` there); the key and password are never logged. A refused certificate, or none
+where one is required, is an `AuthenticationError` saying so (streams then retry once a minute).
+
 **Revocation reaches open connections.** When a token is revoked or expires, or its user is removed, or a user's
 password, role or grants change, wsapi closes that credential's open connections (API, dataplane, log stream) within
 about 2 s, with WebSocket 1008 `credentials revoked or changed: authenticate again`. The next call on the client raises

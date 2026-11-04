@@ -26,6 +26,11 @@ How a pin is enforced: before anything is sent, a TLS handshake (no data) reads 
 compares its fingerprint with the pin; a mismatch raises :class:`CertificateMismatch` and no credential leaves
 this process. The real connection then trusts exactly that certificate (it is the only trust anchor), so a
 different server on the second connection fails its handshake, also before any credential is sent.
+
+A client certificate (:class:`ClientCertificate`; ``client_cert=`` / ``client_key=`` / ``client_key_password=``, or
+``CRESCO_TLS_CLIENT_CERT`` / ``CRESCO_TLS_CLIENT_KEY`` / ``CRESCO_TLS_CLIENT_KEY_PASSWORD``) is presented on every
+connection, the pin check's handshake included. wsapi's production profile (``security_profile=production``) accepts
+nothing else: the certificate, issued by the operator's client CA, names the caller.
 """
 from __future__ import annotations
 
@@ -43,6 +48,9 @@ logger = logging.getLogger(__name__)
 
 ENV_FINGERPRINT = "CRESCO_TLS_FINGERPRINT"
 ENV_CA_FILE = "CRESCO_TLS_CA_FILE"
+ENV_CLIENT_CERT = "CRESCO_TLS_CLIENT_CERT"
+ENV_CLIENT_KEY = "CRESCO_TLS_CLIENT_KEY"
+ENV_CLIENT_KEY_PASSWORD = "CRESCO_TLS_CLIENT_KEY_PASSWORD"
 
 #: Whether a connection whose code names no trust setting verifies the certificate (with the system trust store).
 #: True since 1.4.0: such a connection is verified, and against a self-signed wsapi it fails until a pin or CA file is
@@ -115,6 +123,103 @@ def _parse_pins(pins: Union[None, str, Sequence[str]]) -> List[Tuple[str, str]]:
     return [normalize_fingerprint(p) for p in items]
 
 
+class ClientCertificate:
+    """The client certificate every connection presents (mutual TLS; wsapi's production profile requires one).
+
+    Args:
+        cert: a PEM file with the certificate, then its chain (intermediates); or a PKCS12 file (``.p12`` / ``.pfx``,
+            or any file that is not PEM) holding the key, the certificate and its chain.
+        key: the PEM private key (PKCS#8 or traditional), when ``cert`` is PEM; it may be encrypted.
+        password: the key's (or the PKCS12 file's) password, if any.
+
+    The files are read once, here; a PKCS12 file is converted in memory and handed to TLS through owner-only temporary
+    files under a random passphrase, deleted at once. ``repr`` names the certificate, never the key or the password.
+
+    Raises:
+        TLSConfigError: a file is missing or unreadable, the password is wrong, or the key is not the certificate's.
+    """
+
+    def __init__(self, cert: str, key: Optional[str] = None, password: Optional[str] = None):
+        if not cert or not os.path.isfile(cert):
+            raise TLSConfigError(f"client certificate {cert!r} does not exist")
+        if key is not None and not os.path.isfile(key):
+            raise TLSConfigError(f"client key {key!r} does not exist")
+        with open(cert, "rb") as f:
+            data = f.read()
+        pkcs12 = cert.lower().endswith((".p12", ".pfx")) or (key is None and b"-----BEGIN" not in data)
+        self._pem_chain: bytes
+        self._pem_key: bytes
+        try:
+            from cryptography import x509
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.serialization import pkcs12 as p12
+            pw = password.encode("utf-8") if password is not None else None
+            if pkcs12:
+                k, c, extra = p12.load_key_and_certificates(data, pw)
+                if k is None or c is None:
+                    raise TLSConfigError(f"PKCS12 file {cert!r} holds no key and certificate")
+                chain = [c] + list(extra or [])
+            else:
+                if key is None:
+                    raise TLSConfigError("a PEM client certificate needs its key (client_key=, or CRESCO_TLS_CLIENT_KEY)")
+                with open(key, "rb") as f:
+                    k = serialization.load_pem_private_key(f.read(), pw)
+                blocks = re.findall(rb"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", data, re.S)
+                if not blocks:
+                    raise TLSConfigError(f"client certificate {cert!r} holds no PEM certificate")
+                chain = [x509.load_pem_x509_certificate(b) for b in blocks]
+            self._leaf = chain[0]
+            self._pem_chain = b"".join(x.public_bytes(serialization.Encoding.PEM) for x in chain)
+            self._pass = base64.urlsafe_b64encode(os.urandom(24))
+            self._pem_key = k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                            serialization.BestAvailableEncryption(self._pass))
+        except TLSConfigError:
+            raise
+        except (ValueError, TypeError, OSError) as e:
+            raise TLSConfigError(f"client certificate {cert!r} cannot be used: {e}") from e
+        self.path = cert
+        self.apply(ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))       # fails now, not at the first connection
+
+    @classmethod
+    def from_environment(cls) -> Optional["ClientCertificate"]:
+        """The client certificate named by ``CRESCO_TLS_CLIENT_CERT`` (and ``_KEY``, ``_KEY_PASSWORD``), or None."""
+        cert = os.environ.get(ENV_CLIENT_CERT) or None
+        if cert is None:
+            return None
+        return cls(cert, os.environ.get(ENV_CLIENT_KEY) or None, os.environ.get(ENV_CLIENT_KEY_PASSWORD) or None)
+
+    def apply(self, ctx: ssl.SSLContext) -> None:
+        """Present this certificate on connections made with ``ctx``."""
+        import tempfile
+        d = tempfile.mkdtemp(prefix="pycrescolib-client-")
+        try:
+            os.chmod(d, 0o700)
+            cpath, kpath = os.path.join(d, "chain.pem"), os.path.join(d, "key.pem")
+            for path, data in ((cpath, self._pem_chain), (kpath, self._pem_key)):
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+            try:
+                ctx.load_cert_chain(cpath, kpath, password=self._pass)
+            except ssl.SSLError as e:
+                raise TLSConfigError(f"client certificate {self.path!r}: the key is not the certificate's ({e})") from e
+        finally:
+            for name in ("chain.pem", "key.pem"):
+                try:
+                    os.remove(os.path.join(d, name))
+                except OSError:
+                    pass
+            os.rmdir(d)
+
+    def fingerprint(self) -> str:
+        """``sha256:<hex>`` of the client certificate (what wsapi's deny list names)."""
+        from cryptography.hazmat.primitives import hashes
+        return "sha256:" + self._leaf.fingerprint(hashes.SHA256()).hex()
+
+    def __repr__(self) -> str:
+        return f"ClientCertificate({self._leaf.subject.rfc4514_string()}, {self.fingerprint()[:23]}...)"
+
+
 class TrustSettings:
     """How a connection decides whether the wsapi server certificate is trusted.
 
@@ -126,12 +231,17 @@ class TrustSettings:
         fingerprint: pinned certificate fingerprint(s) (SHA-256 or SHA-384).
         check_hostname: with ``ca_file`` or the system trust store, check the host name (default True). A pin
             identifies the certificate itself, so it never checks the host name.
-        use_env: fall back to ``CRESCO_TLS_FINGERPRINT`` / ``CRESCO_TLS_CA_FILE`` when neither is given.
+        use_env: fall back to ``CRESCO_TLS_FINGERPRINT`` / ``CRESCO_TLS_CA_FILE`` when neither is given, and to
+            ``CRESCO_TLS_CLIENT_CERT`` when no client certificate is.
+        client_cert: a :class:`ClientCertificate` every connection presents (mutual TLS), or None.
     """
 
     def __init__(self, verify: Optional[bool] = None, ca_file: Optional[str] = None,
                  fingerprint: Union[None, str, Sequence[str]] = None, check_hostname: bool = True,
-                 use_env: bool = True):
+                 use_env: bool = True, client_cert: Optional["ClientCertificate"] = None):
+        if client_cert is None and use_env:
+            client_cert = ClientCertificate.from_environment()
+        self.client_cert = client_cert
         if verify is False and (ca_file or fingerprint):
             raise TLSConfigError("verify_ssl=False cannot be combined with ca_file or fingerprint")
         if use_env and ca_file is None and fingerprint is None:
@@ -172,13 +282,14 @@ class TrustSettings:
         return "system"
 
     def describe(self) -> str:
+        mine = f", presenting {self.client_cert!r}" if self.client_cert is not None else ""
         if self.mode == "fingerprint":
-            return "pinned " + ", ".join(f"{a}:{h[:16]}..." for a, h in self.pins)
+            return "pinned " + ", ".join(f"{a}:{h[:16]}..." for a, h in self.pins) + mine
         if self.mode == "ca_file":
-            return f"CA file {self.ca_file}"
+            return f"CA file {self.ca_file}" + mine
         if self.mode == "insecure" and self._unspecified:
-            return "not verified (no trust setting given)"
-        return self.mode
+            return "not verified (no trust setting given)" + mine
+        return self.mode + mine
 
     def matches(self, der: bytes) -> bool:
         """True if the DER certificate matches one of the pins (constant-time compare)."""
@@ -193,6 +304,18 @@ class TrustSettings:
         return ctx
 
     async def ssl_context(self, host: str, port: int, url: str, timeout: float = 8.0) -> ssl.SSLContext:
+        """The SSL context for one connection to ``host:port``, after any pin check; it presents the client certificate.
+
+        Raises:
+            CertificateMismatch: the server certificate does not match the pin.
+            CertificateVerificationError: the certificate could not be read for the pin check.
+        """
+        ctx = await self._server_trust(host, port, url, timeout)
+        if self.client_cert is not None:
+            self.client_cert.apply(ctx)
+        return ctx
+
+    async def _server_trust(self, host: str, port: int, url: str, timeout: float) -> ssl.SSLContext:
         """The SSL context for one connection to ``host:port``, after any pin check.
 
         Raises:
@@ -214,7 +337,7 @@ class TrustSettings:
             ctx.verify_mode = ssl.CERT_NONE
             return ctx
         if self.mode == "fingerprint":
-            der = await fetch_server_certificate(host, port, timeout)
+            der = await fetch_server_certificate(host, port, timeout, self.client_cert)
             if not self.matches(der):
                 raise CertificateMismatch(
                     f"wsapi certificate mismatch for {host}:{port}: the pinned fingerprint "
@@ -247,6 +370,9 @@ class TrustSettings:
         """A clear message for a failed handshake."""
         if isinstance(err, CertificateVerificationError):
             return str(err)
+        refused = client_certificate_refusal(err, self.client_cert)
+        if refused:
+            return f"wsapi at {host}:{port} {refused}"
         if isinstance(err, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(err):
             how = {
                 "system": "the system trust store does not trust it (wsapi certificates are self-signed by default)",
@@ -259,12 +385,38 @@ class TrustSettings:
         return f"{err}"
 
 
-async def fetch_server_certificate(host: str, port: int, timeout: float = 8.0) -> bytes:
-    """Complete a TLS handshake with ``host:port``, send nothing, and return the server certificate (DER)."""
+def client_certificate_refusal(err: BaseException, client_cert: Optional["ClientCertificate"]) -> Optional[str]:
+    """Why the server refused the TLS connection over the client certificate, or None (another failure)."""
+    text = ""
+    e: Optional[BaseException] = err
+    while e is not None and len(text) < 2000:
+        text += " " + str(e) + " " + type(e).__name__
+        e = e.__cause__ or e.__context__
+    t = text.upper()
+    if "CERTIFICATE_REQUIRED" in t or "CERTIFICATE REQUIRED" in t:
+        return ("requires a client certificate (its security_profile is production): give client_cert= and client_key= "
+                "(or CRESCO_TLS_CLIENT_CERT and CRESCO_TLS_CLIENT_KEY)" if client_cert is None else
+                f"refused the client certificate {client_cert!r}")
+    if any(a in t for a in ("ALERT_BAD_CERTIFICATE", "ALERT_UNKNOWN_CA", "ALERT_CERTIFICATE_UNKNOWN", "ALERT_CERTIFICATE_EXPIRED",
+                            "ALERT_CERTIFICATE_REVOKED", "ALERT_UNSUPPORTED_CERTIFICATE", "ALERT_ACCESS_DENIED")):
+        if client_cert is None:                      # wsapi (JDK TLS) answers a missing certificate with bad_certificate
+            return ("requires a client certificate (its security_profile is production): give client_cert= and client_key= "
+                    f"(or CRESCO_TLS_CLIENT_CERT and CRESCO_TLS_CLIENT_KEY) ({err})")
+        return (f"did not accept the client certificate {client_cert!r} at TLS (not issued by its client CA, expired, or "
+                f"unusable): {err}")
+    return None
+
+
+async def fetch_server_certificate(host: str, port: int, timeout: float = 8.0,
+                                   client_cert: Optional["ClientCertificate"] = None) -> bytes:
+    """Complete a TLS handshake with ``host:port``, send nothing, and return the server certificate (DER). The client
+    certificate, if any, is presented (a server that requires one would otherwise refuse the handshake)."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    if client_cert is not None:
+        client_cert.apply(ctx)
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port, ssl=ctx, server_hostname=host), timeout=timeout)
@@ -336,8 +488,25 @@ async def connect_websocket(url: str, host: str, port: int, tls: TrustSettings, 
             websockets.connect(url, ssl=ctx, additional_headers=credentials.headers(), **kwargs),
             timeout=open_timeout)
     except ssl.SSLError as e:
+        refused = client_certificate_refusal(e, tls.client_cert)
+        if refused:
+            raise AuthenticationError(f"wsapi at {host}:{port} {refused}") from e
         raise CertificateVerificationError(tls.explain(e, host, port)) from e
     except Exception as e:
+        refused = client_certificate_refusal(e, tls.client_cert)
+        if refused:
+            raise AuthenticationError(f"wsapi at {host}:{port} {refused}") from e
+        if _closed_before_http(e):
+            # TLS completed but the server closed before answering: with TLS 1.3 a server refuses a missing or unaccepted
+            # client certificate after the client's side of the handshake, and asyncio drops the alert. Look once more.
+            alert = await _tls_alert(host, port, tls, url)
+            refused = client_certificate_refusal(alert, tls.client_cert) if alert is not None else None
+            raise AuthenticationError(f"wsapi at {host}:{port} " + (refused or (
+                "closed the connection after TLS without answering: it may require a client certificate (its "
+                "security_profile is production): give client_cert= and client_key= (or CRESCO_TLS_CLIENT_CERT and "
+                "CRESCO_TLS_CLIENT_KEY)" if tls.client_cert is None else
+                f"closed the connection after TLS without answering: it may not accept the client certificate "
+                f"{tls.client_cert!r} (not issued by its client CA, or expired)"))) from e
         rej = _rejection(e)
         if rej is not None:
             status, text = rej
@@ -352,6 +521,42 @@ async def connect_websocket(url: str, host: str, port: int, tls: TrustSettings, 
         await ws.close()
         raise
     return ws
+
+
+def _closed_before_http(err: BaseException) -> bool:
+    """The connection closed after TLS, before any HTTP response (websockets' InvalidMessage from an EOF)."""
+    e: Optional[BaseException] = err
+    seen = 0
+    while e is not None and seen < 10:
+        if isinstance(e, EOFError) and "status line" in str(e):
+            return True
+        e = e.__cause__ or e.__context__
+        seen += 1
+    return False
+
+
+async def _tls_alert(host: str, port: int, tls: "TrustSettings", url: str, timeout: float = 4.0) -> Optional[BaseException]:
+    """A plain blocking TLS connection that sends one request line: the SSL error it ends with (the server's alert), or
+    None when the server just closes (or answers)."""
+    import socket
+
+    ctx = await tls.ssl_context(host, port, url, timeout=timeout)
+
+    def probe():
+        try:
+            with socket.create_connection((host, port), timeout=timeout) as raw:
+                with ctx.wrap_socket(raw, server_hostname=host) as s:
+                    s.sendall(b"GET / HTTP/1.1\r\nHost: " + host.encode("ascii", "replace") + b"\r\n\r\n")
+                    s.recv(1)
+            return None
+        except ssl.SSLError as e:
+            return e
+        except OSError:
+            return None
+    try:
+        return await asyncio.get_running_loop().run_in_executor(None, probe)
+    except Exception:
+        return None
 
 
 _USER = re.compile(r"^[A-Za-z0-9._@-]{1,128}$")
@@ -374,11 +579,14 @@ class Credentials:
     """
 
     def __init__(self, service_key: Optional[str] = None, user: Optional[str] = None,
-                 password: Optional[str] = None, token: Optional[str] = None):
+                 password: Optional[str] = None, token: Optional[str] = None, client_certificate: bool = False):
         given = sum(1 for g in (service_key, token, user or password) if g)
         if given > 1:
             raise ValueError("give one of token, service_key, or user and password")
-        if token is not None:
+        self.client_certificate = bool(client_certificate) and given == 0
+        if self.client_certificate:
+            pass                                    # the TLS client certificate is the credential: no header
+        elif token is not None:
             if not _TOKEN.fullmatch(token):
                 raise ValueError("an API token looks like cwt1_<16 hex>.<43 base64url characters>")
         elif user is not None or password is not None:
@@ -387,7 +595,7 @@ class Credentials:
             if not _USER.match(user):
                 raise ValueError("user names are 1-128 characters from A-Z a-z 0-9 . _ @ -")
         elif not service_key:
-            raise ValueError("credentials needed: token, service_key, or user and password")
+            raise ValueError("credentials needed: token, service_key, user and password, or a client certificate")
         self.user = user
         self._password = password
         self._service_key = service_key
@@ -399,6 +607,8 @@ class Credentials:
         return self._token[5:21] if self._token else None
 
     def headers(self) -> dict:
+        if self.client_certificate:
+            return {}
         if self._token is not None:
             return {"Authorization": "Bearer " + self._token}
         if self.user is not None:
@@ -407,6 +617,8 @@ class Credentials:
         return {"cresco_service_key": self._service_key}
 
     def __repr__(self) -> str:
+        if self.client_certificate:
+            return "Credentials(client certificate)"
         if self._token is not None:
             return f"Credentials(token={self.token_id}...)"
         return f"Credentials(user={self.user!r})" if self.user else "Credentials(service_key=***)"
