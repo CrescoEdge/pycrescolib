@@ -9,7 +9,7 @@ Part of the Cresco framework — see the **[agent repository](https://github.com
 architecture and the [Java client](https://github.com/CrescoEdge/clientlib) for the equivalent in Java.
 
 > **Standardized clients.** The Python and Java clients are kept feature- and name-identical: the same
-> submodules (`messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`), the same method names (snake_case
+> submodules (`messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`, `executor`), the same method names (snake_case
 > in both languages), the same behavior, and the same examples. Anything you can do in one, you can do in the
 > other with the same call. This README is identical to the Java client's, except for the install and
 > quick-start sections below.
@@ -39,7 +39,7 @@ live in [`examples/standard_examples.py`](examples/standard_examples.py): `examp
 ## Concepts
 
 - **Connect once, use submodules.** A `clientlib` opens one authenticated control connection and exposes six
-  submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`.
+  submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`, `executor`, `filerepo`.
 - **Resolve plugins by name, not by log-scraping.** `globalcontroller.find_plugin(region, agent, name)` returns the
   live `plugin_id` for a plugin loaded on an agent, so you never parse logs to address a plugin.
 - **Streams are separate sockets.** `get_dataplane(...)` and `get_logstreamer(...)` open their own WebSocket
@@ -77,7 +77,7 @@ Signatures are shown language-neutrally; names and behavior are identical in bot
 | `close_logstreamer(name) -> bool` | Close and deregister the named logstreamer. |
 | `get_active_logstreamers() -> list` | List names of currently registered logstreamers. |
 
-Submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`.
+Submodule handles: `messaging`, `agents`, `admin`, `api`, `globalcontroller`, `stunnel`, `executor`, `filerepo`.
 
 ### `api`
 
@@ -187,6 +187,33 @@ All take `(is_rpc, message_event_type, message_payload, ...)` and return the rep
 | `regional_plugin_msgevent(..., dst_agent, dst_plugin)` | a plugin in the local region |
 | `plugin_msgevent(..., dst_plugin)` | a local plugin |
 
+### `executor`
+
+Run OS processes on an agent through the [io.cresco.executor](https://github.com/CrescoEdge/executor) plugin and drive
+their stdin. A process's stdout and stderr stream over the dataplane under its `stream_name` (`type` `output` /
+`error`), its exit as an `execution_log` event. **Stdin is never the dataplane:** it is the executor's `write_stdin`
+action, accepted only from the caller that started the runner, an admin or infra, and only for a runner configured
+with `stdin=True` (or an `-interactive-` command). Plugin ids are resolved by name when `plugin_id` is not given.
+
+| Method | Description |
+|---|---|
+| `config_process(region, agent, stream_name, command, stdin=False, metrics=False, plugin_id=None)` | Register a runner (`infra` / `admin`). Returns `{config_status, stdin, error_msg}`; `stdin` says whether it takes `write_stdin`. |
+| `run_process(region, agent, stream_name, plugin_id=None)` | Start it (`infra` / `admin`); the caller that starts it may write its stdin. |
+| `write_stdin(region, agent, stream_name, data, newline=True, close=False, plugin_id=None)` | Write text (UTF-8, newline appended unless `newline=False`) or bytes; `close=True` ends input after it. Input over 64 KiB goes in ordered writes. Returns the bytes written; **raises** `StdinWriteError` (`refusal`: `not-owner`, `no-stdin`, `not-running`; `written`) when the executor refuses. |
+| `close_stdin(region, agent, stream_name, plugin_id=None)` | End the process's input. |
+| `status_process(region, agent, stream_name, plugin_id=None)` | `True` while it runs. |
+| `end_process(region, agent, stream_name, plugin_id=None)` | Kill it (its whole tree) and free the runner (`infra` / `admin`). |
+
+```python
+out = []
+dp = client.get_dataplane(json.dumps({"ident_key": "stream_name", "ident_id": "job-1"}), out.append)
+dp.connect()                                                     # stdout / stderr / execution_log of job-1
+client.executor.config_process("global-region", "agent-a", "job-1", "sort", stdin=True)
+client.executor.run_process("global-region", "agent-a", "job-1")
+client.executor.write_stdin("global-region", "agent-a", "job-1", "pear")
+client.executor.write_stdin("global-region", "agent-a", "job-1", "apple", close=True)   # sort prints once stdin ends
+```
+
 ### `filerepo`
 
 | Method | Description |
@@ -284,8 +311,10 @@ wsapi until it does. Nothing is sent to the server in the meantime; `last_error`
 
 - A dataplane `MapMessage` (for example the executor's `execution_log` with a process's exit code, and its
   `delete_exchange`) arrives as a text message holding the JSON object of its entries.
-- No dataplane subscription receives a process's stdin (wsapi narrows every subscription), so a client cannot read what
-  others type into a runner; writing stdin is unchanged (open the stream with `input_id=<stdin_type>`).
+- No dataplane stream carries a process's stdin. It is written with `executor.write_stdin` (the executor's
+  `write_stdin` action); a dataplane stream config that would write it (`io_type_key` `type`, `input_id` `input` or
+  `input-*`) raises `ValueError` here, and wsapi refuses it too. No subscription receives stdin either (wsapi narrows
+  every subscription). Before 1.4.0 stdin was written by opening such a stream; the hardened executor reads none.
 - `filerepo.stream_file` downloads a file from a filerepo plugin over the dataplane and verifies it: filerepo ends every
   transfer with a terminal frame carrying its status and the SHA-384 of the bytes it sent (through wsapi, a JSON text
   frame `{"transfer_id", "transfer_end": "true", "transfer_status", "total_bytes", "sha384", ...}`). The chunks are
