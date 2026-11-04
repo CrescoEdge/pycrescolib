@@ -2,9 +2,6 @@
 Improved WebSocket interface for Cresco library.
 Uses direct WebSocket communication with proper thread and event loop handling.
 """
-import ssl
-import warnings
-
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 
@@ -18,6 +15,8 @@ import concurrent.futures
 from typing import Optional, Dict, Any
 
 import websockets
+
+from .tls import Credentials, TrustSettings, connect_websocket, peer_certificate
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -36,27 +35,31 @@ class ws_interface:
         self._loop = None
         self._thread = None
         self._running = False
-        self._service_key = None
-        self._verify_ssl = None
+        self._tls = None
+        self._credentials = None
+        self.last_error = None  # why the last connect failed (certificate, credentials, network), or None
         self._connected = False
         self._lock = threading.RLock()  # Reentrant lock for thread safety
         self._shutdown_flag = False  # Flag to indicate shutdown in progress
 
-    def connect(self, url, service_key, verify_ssl=True):
+    def connect(self, url, service_key=None, verify_ssl=True, tls=None, credentials=None):
         """Store connection parameters and initialize the event loop.
 
         Args:
             url: WebSocket URL
-            service_key: Service key for authentication
-            verify_ssl: Whether to verify SSL certificates
+            service_key: Service key for authentication (when ``credentials`` is not given)
+            verify_ssl: Whether to verify the server certificate (when ``tls`` is not given)
+            tls: a :class:`pycrescolib.tls.TrustSettings` (CA file, pinned fingerprint, or insecure)
+            credentials: a :class:`pycrescolib.tls.Credentials` (per-user, or the service key)
 
         Returns:
-            True if connection setup was successful
+            True if connection setup was successful; on failure ``last_error`` says why
         """
         self.url = url
-        self._service_key = service_key
-        self._verify_ssl = verify_ssl
+        self._tls = tls if tls is not None else TrustSettings(verify=verify_ssl)
+        self._credentials = credentials if credentials is not None else Credentials(service_key=service_key)
         self._shutdown_flag = False
+        self.last_error = None
 
         logger.info(f"Preparing connection to {url}")
 
@@ -71,7 +74,7 @@ class ws_interface:
 
         try:
             # Wait for result with timeout
-            result = future.result(timeout=10.0)
+            result = future.result(timeout=20.0)  # a pin check adds one TLS handshake
             self._connected = result
             return result
         except Exception as e:
@@ -135,42 +138,23 @@ class ws_interface:
             logger.error(f"Error during task cleanup: {e}")
 
     async def connect_async(self):
-        """Establish WebSocket connection asynchronously."""
+        """Establish WebSocket connection asynchronously (TLS verified per the trust settings)."""
 
-        logger.info(f"Connecting to {self.url}")
+        logger.info(f"Connecting to {self.url} (TLS trust: {self._tls.describe()})")
 
         try:
-            # Configure SSL
-            ssl_context = None
-            if self.url.startswith('wss://'):
-                ssl_context = ssl.create_default_context()
-                if not self._verify_ssl:
-                    ssl_context.check_hostname = False
-                    ssl_context.verify_mode = ssl.CERT_NONE
-                    logger.debug("SSL certificate verification disabled")
+            surl = self.url.split('/')[2]
+            host, port = surl.rsplit(':', 1)
+            host = host.strip('[]')
+            self.ws = await connect_websocket(self.url, host, int(port), self._tls, self._credentials,
+                                              open_timeout=8.0)
 
-            # Connect to WebSocket with a timeout
-            self.ws = await asyncio.wait_for(
-                websockets.connect(
-                    self.url,
-                    ssl=ssl_context if self.url.startswith('wss://') else None,
-                    additional_headers={'cresco_service_key': self._service_key}
-                ),
-                timeout=8.0
-            )
-
-            # Extract certificate information
+            # Identity is carried in three separate DN attributes so each stays within the X.509 64-char
+            # limit: O=region, OU=agent, CN=plugin. Read from THIS connection's verified certificate (an
+            # earlier version fetched it over a second, unverified connection).
             try:
-                # Get host and port from URL
-                surl = self.url.split('/')[2].split(':')
-                server_address = (surl[0], int(surl[1]))
+                cert = x509.load_der_x509_certificate(peer_certificate(self.ws))
 
-                # Get server certificate
-                pem_data = ssl.get_server_certificate(server_address)
-                cert = x509.load_pem_x509_certificate(str.encode(pem_data))
-
-                # Identity is carried in three separate DN attributes so each stays within the
-                # X.509 64-char limit: O=region, OU=agent, CN=plugin.
                 def _dn_attr(oid):
                     values = cert.subject.get_attributes_for_oid(oid)
                     return values[0].value if values else None
@@ -183,7 +167,6 @@ class ws_interface:
                     f"Extracted identity from certificate: region={self.region}, agent={self.agent}, plugin={self.plugin}")
             except Exception as e:
                 logger.error(f"Error extracting certificate info: {e}")
-                # If extraction fails, set to None
                 self.region = None
                 self.agent = None
                 self.plugin = None
@@ -191,9 +174,11 @@ class ws_interface:
             logger.info("WebSocket connection established successfully")
             return True
         except asyncio.TimeoutError:
+            self.last_error = f"connection to {self.url} timed out"
             logger.error("Connection attempt timed out")
             return False
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"Connection error: {e}")
             return False
 

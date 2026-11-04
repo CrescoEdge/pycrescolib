@@ -5,6 +5,9 @@ Every example here has a byte-for-byte counterpart in the Java client
 (clientlib: example/standard/StandardExamples.java) with the same function name,
 the same step-by-step structure, and the same narrative comments. Only the
 language syntax differs. Edit HOST/PORT/SERVICE_KEY, then run one example.
+
+The wsapi certificate is verified: set CRESCO_TLS_FINGERPRINT to the value in the wsapi
+plugin's ws.fingerprint file (or CRESCO_TLS_CA_FILE to its ws.crt.pem) before running.
 """
 import time
 
@@ -17,7 +20,8 @@ SERVICE_KEY = 'a-service-key'
 
 def new_client():
     """Create a connected client, or None if the connection failed."""
-    client = clientlib(HOST, PORT, SERVICE_KEY, verify_ssl=False)
+    # trust comes from CRESCO_TLS_FINGERPRINT / CRESCO_TLS_CA_FILE (or pass fingerprint=... / ca_file=...)
+    client = clientlib(HOST, PORT, SERVICE_KEY)
     if not client.connect():
         print('Failed to connect')
         return None

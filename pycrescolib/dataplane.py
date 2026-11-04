@@ -2,7 +2,6 @@
 Dataplane implementation for Cresco communications with binary data support.
 """
 import concurrent
-import ssl
 import json
 import os
 import time
@@ -13,6 +12,8 @@ from typing import Dict, Any, Optional, Callable, Union, BinaryIO
 import websockets
 import backoff
 from contextlib import asynccontextmanager
+
+from .tls import Credentials, TrustSettings, connect_websocket
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -40,8 +41,17 @@ class DataplaneSubscriptionRefused(Exception):
 class dataplane:
     """Dataplane class for streaming data in Cresco."""
 
-    def __init__(self, host: str, port: int, stream_name: str, service_key: str, callback: Optional[Callable] = None,
-                 binary_callback: Optional[Callable] = None, refused_callback: Optional[Callable[[str], None]] = None):
+    def __init__(self, host: str, port: int, stream_name: str, service_key: Optional[str] = None,
+                 callback: Optional[Callable] = None, binary_callback: Optional[Callable] = None,
+                 refused_callback: Optional[Callable[[str], None]] = None, *,
+                 tls: Optional[TrustSettings] = None, credentials: Optional[Credentials] = None):
+        """A dataplane stream. Prefer :meth:`pycrescolib.clientlib.clientlib.get_dataplane`, which passes the
+        client's trust settings and credentials.
+
+        Args:
+            tls: how the server certificate is verified (default: verified, see :mod:`pycrescolib.tls`)
+            credentials: what the stream authenticates with (default: ``service_key``)
+        """
         self.host = host
         self.port = port
         self.stream_name = stream_name
@@ -58,8 +68,11 @@ class dataplane:
         self._running = False
         self._reconnect_task = None
         self._lock = asyncio.Lock()
-        self._service_key = service_key  # Use the provided service key
+        self._tls = tls if tls is not None else TrustSettings()
+        self._credentials = credentials if credentials is not None else Credentials(service_key=service_key)
+        self.last_error = None  # why the last connect failed (certificate, credentials, network), or None
         self._event_loop = asyncio.new_event_loop()
+        self._thread = None
         self._partial_fragments = []  # accumulates send_partial() fragments until complete=True
         self.subscription_refused = None  # the broker's reason, when it refused this stream's subscription
         # called with the broker's reason on every refusal, the first connect and every reconnect alike
@@ -187,14 +200,6 @@ class dataplane:
         try:
             ws_url = f'wss://{self.host}:{self.port}/api/dataplane'
 
-            # Setup SSL context
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-
-            # Headers for authentication
-            headers = {'cresco_service_key': self._service_key}
-
             # Close any prior socket before replacing it: silently overwriting leaked the old
             # connection and its server-side session on every reconnect (visible as an endless
             # stream of new client sessions on the wsapi side).
@@ -208,10 +213,10 @@ class dataplane:
             # Connect. compression=None disables permessage-deflate: the dataplane carries
             # mostly binary/incompressible payloads, and per-message deflate is a large CPU cost
             # on both ends that caps throughput (it was the dominant dataplane bottleneck).
-            self.ws = await websockets.connect(
-                ws_url,
-                ssl=ssl_context,
-                additional_headers=headers,
+            # TLS verified per the client's trust settings (CA file, pinned fingerprint, or the system store);
+            # the credentials are sent only to a server that passed that check.
+            self.ws = await connect_websocket(
+                ws_url, self.host, self.port, self._tls, self._credentials,
                 compression=None,
                 # The websockets default (1 MiB) silently capped dataplane messages; the server accepts 1 GiB.
                 # Bounded, not unlimited: each connection may buffer this much per message.
@@ -267,53 +272,97 @@ class dataplane:
                     })
             await self.ws.send(handshake)
             logger.info(f"Connected to dataplane stream: {self.stream_name}")
+            self.last_error = None
 
             return True
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"Dataplane connection error: {e}")
             return False
 
     def connect(self):
-        """Connect to the dataplane stream."""
+        """Connect to the dataplane stream.
+
+        Returns:
+            True once the stream is active. False if it did not activate within 5 s or the connection failed
+            (``last_error`` says why: an untrusted certificate, refused credentials, the network).
+
+        Raises:
+            DataplaneSubscriptionRefused: a receiver whose subscription the broker refused
+        """
+        import threading
+        import time
+
+        if self._event_loop.is_closed():
+            # closed by an earlier close(): a fresh loop (and a lock bound to nothing yet) for this connect
+            self._event_loop = asyncio.new_event_loop()
+            self._lock = asyncio.Lock()
+        loop = self._event_loop
+        first_attempt_done = threading.Event()
+        first_attempt_ok = []
 
         def run():
             self._running = True
-
-            # Setup and start the event loop
-            asyncio.set_event_loop(self._event_loop)
-
-            # Create tasks
-            connect_task = self._event_loop.create_task(self._connect())
-            self._event_loop.run_until_complete(connect_task)
-
-            if connect_task.result():
-                self._task = self._event_loop.create_task(self._message_handler())
-                self._reconnect_task = self._event_loop.create_task(self._reconnect_monitor())
-
-                # No need to wait for activation before returning - start async task instead
-                self._event_loop.create_task(self._wait_for_activation())
-
-            # Run event loop forever
-            self._event_loop.run_forever()
+            asyncio.set_event_loop(loop)
+            try:
+                connect_task = loop.create_task(self._connect())
+                loop.run_until_complete(connect_task)
+                ok = bool(connect_task.result())
+                first_attempt_ok.append(ok)
+                if ok:
+                    self._task = loop.create_task(self._message_handler())
+                    self._reconnect_task = loop.create_task(self._reconnect_monitor())
+                    loop.create_task(self._wait_for_activation())
+                first_attempt_done.set()
+                if ok:
+                    loop.run_forever()
+            except Exception as e:
+                logger.error(f"Dataplane {self.stream_name} event loop error: {e}")
+            finally:
+                first_attempt_done.set()
+                self._running = False
+                self._shutdown_loop(loop)
 
         # Start in a separate thread to avoid blocking
-        import threading
-        thread = threading.Thread(target=run, daemon=True)
+        thread = threading.Thread(target=run, daemon=True, name=f"pycrescolib-dataplane")
+        self._thread = thread
         thread.start()
 
-        # Wait for activation with a timeout
-        import time
-        start_time = time.time()
-        timeout = 5.0  # 5 second timeout
-
-        while not self.isActive and time.time() - start_time < timeout:
-            time.sleep(0.1)
+        # Wait for activation with a timeout; stop waiting as soon as the first connection attempt failed
+        deadline = time.time() + 5.0
+        while not self.isActive and time.time() < deadline:
+            if first_attempt_done.is_set() and first_attempt_ok == [False]:
+                break
+            time.sleep(0.05)
 
         if not self.isActive:
-            logger.warning(f"Timeout waiting for dataplane {self.stream_name} activation")
+            if first_attempt_ok == [False]:
+                logger.error(f"Dataplane {self.stream_name} could not connect: {self.last_error}")
+            else:
+                logger.warning(f"Timeout waiting for dataplane {self.stream_name} activation")
 
         self._raise_if_refused()
         return self.isActive
+
+    @staticmethod
+    def _shutdown_loop(loop) -> None:
+        """Close an event loop that is no longer running: cancel what is left, then release its resources."""
+        try:
+            if loop.is_closed():
+                return
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception as e:
+            logger.debug(f"dataplane loop shutdown: {e}")
+        finally:
+            try:
+                loop.close()
+            except Exception as e:
+                logger.debug(f"dataplane loop close: {e}")
 
     def _on_activation(self, status: Dict[str, Any]) -> None:
         """Apply the wsapi activation reply (the first frame of every session)."""
@@ -511,41 +560,50 @@ class dataplane:
         self.send(f'{dst_region},{dst_agent},Trace,default')
 
     def close(self):
-        """Close the dataplane connection with proper task cleanup."""
+        """Close the dataplane connection, stop its event loop and close the loop.
+
+        Idempotent. Before, close() stopped the loop but never closed it (nor joined its thread), so every
+        dataplane leaked a selector, its socket pair and a thread.
+        """
+        import threading
         logger.info(f"Closing dataplane {self.stream_name}...")
 
         # Signal shutdown
         self._running = False
         self.isActive = False
+        loop = self._event_loop
+        if loop.is_closed():
+            return
 
-        # First, cancel regular tasks
-        if self._task:
-            self._event_loop.call_soon_threadsafe(self._task.cancel)
-        if self._reconnect_task:
-            self._event_loop.call_soon_threadsafe(self._reconnect_task.cancel)
+        if loop.is_running():
+            # First, cancel regular tasks
+            if self._task:
+                loop.call_soon_threadsafe(self._task.cancel)
+            if self._reconnect_task:
+                loop.call_soon_threadsafe(self._reconnect_task.cancel)
 
-        # Create and run a cleanup task
-        cleanup_future = asyncio.run_coroutine_threadsafe(
-            self._cleanup_all_tasks(),
-            self._event_loop
-        )
+            # Close the socket and cancel what is left, on the loop's own thread
+            cleanup_future = asyncio.run_coroutine_threadsafe(self._cleanup_all_tasks(), loop)
+            try:
+                cleanup_future.result(timeout=2.0)
+            except concurrent.futures.TimeoutError:
+                logger.warning("Cleanup tasks timed out")
+            except Exception as e:
+                logger.error(f"Error during task cleanup: {e}")
 
-        try:
-            # Give it a short time to complete
-            cleanup_future.result(timeout=1.0)
-        except concurrent.futures.TimeoutError:
-            logger.warning("Cleanup tasks timed out")
-        except Exception as e:
-            logger.error(f"Error during task cleanup: {e}")
-
-        # Stop the event loop
-        try:
-            self._event_loop.call_soon_threadsafe(self._event_loop.stop)
-            # Wait briefly for the event loop to stop
-            import time
-            time.sleep(0.2)
-        except Exception as e:
-            logger.error(f"Error stopping event loop: {e}")
+            # Stop the loop; its thread then closes it (see connect.run)
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass  # closed meanwhile
+            t = self._thread
+            if t is not None and t is not threading.current_thread():
+                t.join(timeout=3.0)
+                if t.is_alive():
+                    logger.warning(f"Dataplane {self.stream_name} event loop thread did not stop")
+        elif self._thread is None or not self._thread.is_alive():
+            # never connected (or its thread already ended): nothing runs the loop, close it here
+            self._shutdown_loop(loop)
 
         logger.info(f"Dataplane {self.stream_name} closed")
 

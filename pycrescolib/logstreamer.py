@@ -2,7 +2,6 @@
 Log streamer implementation for Cresco communications.
 """
 import concurrent
-import ssl
 import json
 import time
 import logging
@@ -12,13 +11,24 @@ import websockets
 import backoff
 from contextlib import asynccontextmanager
 
+from .dataplane import dataplane as _dataplane
+from .tls import Credentials, TrustSettings, connect_websocket
+
 # Setup logging
 logger = logging.getLogger(__name__)
 
 class logstreamer:
     """Log streamer class for streaming logs in Cresco."""
 
-    def __init__(self, host: str, port: int, service_key: str, callback: Optional[Callable] = None):
+    def __init__(self, host: str, port: int, service_key: Optional[str] = None, callback: Optional[Callable] = None,
+                 *, tls: Optional[TrustSettings] = None, credentials: Optional[Credentials] = None):
+        """A log stream. Prefer :meth:`pycrescolib.clientlib.clientlib.get_logstreamer`, which passes the
+        client's trust settings and credentials.
+
+        Args:
+            tls: how the server certificate is verified (default: verified, see :mod:`pycrescolib.tls`)
+            credentials: what the stream authenticates with (default: ``service_key``)
+        """
         self.host = host
         self.port = port
         self.ws = None
@@ -29,8 +39,11 @@ class logstreamer:
         self._running = False
         self._reconnect_task = None
         self._lock = asyncio.Lock()
-        self._service_key = service_key  # Use the provided service key
+        self._tls = tls if tls is not None else TrustSettings()
+        self._credentials = credentials if credentials is not None else Credentials(service_key=service_key)
+        self.last_error = None  # why the last connect failed (certificate, credentials, network), or None
         self._event_loop = asyncio.new_event_loop()
+        self._thread = None
 
     async def _message_handler(self):
         """Handle incoming messages."""
@@ -97,14 +110,6 @@ class logstreamer:
         try:
             ws_url = f'wss://{self.host}:{self.port}/api/logstreamer'
 
-            # Setup SSL context
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-
-            # Headers for authentication
-            headers = {'cresco_service_key': self._service_key}
-
             # Close any prior socket before replacing it: silently overwriting leaked the old
             # connection and its server-side session on every reconnect.
             if self.ws is not None:
@@ -115,11 +120,8 @@ class logstreamer:
                 self.ws = None
 
             # Connect
-            self.ws = await websockets.connect(
-                ws_url,
-                ssl=ssl_context,
-                additional_headers=headers
-            )
+            # TLS verified per the client's trust settings; the credentials go only to a server that passed it
+            self.ws = await connect_websocket(ws_url, self.host, self.port, self._tls, self._credentials)
 
             # Re-arm activation: the FIRST frame of EVERY (re)connected session is the
             # activation status, and the handler gates on message_count == 0. Without this
@@ -128,8 +130,10 @@ class logstreamer:
             self.isActive = False
 
             logger.info("Connected to log streamer")
+            self.last_error = None
             return True
         except Exception as e:
+            self.last_error = str(e)
             logger.error(f"Log streamer connection error: {e}")
             return False
 
@@ -254,44 +258,58 @@ class logstreamer:
         return self.isActive
 
     def connect(self):
-        """Connect to the log streamer."""
+        """Connect to the log streamer.
+
+        Returns:
+            True once the stream is active; False otherwise (``last_error`` says why when the connection failed).
+        """
+        import threading
+        import time
+
+        if self._event_loop.is_closed():
+            self._event_loop = asyncio.new_event_loop()
+            self._lock = asyncio.Lock()
+        loop = self._event_loop
+        first_attempt_done = threading.Event()
+        first_attempt_ok = []
 
         def run():
             self._running = True
+            asyncio.set_event_loop(loop)
+            try:
+                connect_task = loop.create_task(self._connect())
+                loop.run_until_complete(connect_task)
+                ok = bool(connect_task.result())
+                first_attempt_ok.append(ok)
+                if ok:
+                    self._task = loop.create_task(self._message_handler())
+                    self._reconnect_task = loop.create_task(self._reconnect_monitor())
+                    loop.create_task(self._wait_for_activation())
+                first_attempt_done.set()
+                if ok:
+                    loop.run_forever()
+            except Exception as e:
+                logger.error(f"Log streamer event loop error: {e}")
+            finally:
+                first_attempt_done.set()
+                self._running = False
+                _dataplane._shutdown_loop(loop)
 
-            # Setup and start the event loop
-            asyncio.set_event_loop(self._event_loop)
-
-            # Create tasks
-            connect_task = self._event_loop.create_task(self._connect())
-            self._event_loop.run_until_complete(connect_task)
-
-            if connect_task.result():
-                self._task = self._event_loop.create_task(self._message_handler())
-                self._reconnect_task = self._event_loop.create_task(self._reconnect_monitor())
-
-                # No need to wait for activation before returning in the main thread
-                # Just start the activation check task
-                self._event_loop.create_task(self._wait_for_activation())
-
-            # Run event loop forever
-            self._event_loop.run_forever()
-
-        # Start in a separate thread to avoid blocking
-        import threading
-        thread = threading.Thread(target=run, daemon=True)
+        thread = threading.Thread(target=run, daemon=True, name="pycrescolib-logstreamer")
+        self._thread = thread
         thread.start()
 
-        # Wait for activation with a timeout
-        import time
-        start_time = time.time()
-        timeout = 5.0  # 5 second timeout
-
-        while not self.isActive and time.time() - start_time < timeout:
-            time.sleep(0.1)
+        deadline = time.time() + 5.0
+        while not self.isActive and time.time() < deadline:
+            if first_attempt_done.is_set() and first_attempt_ok == [False]:
+                break
+            time.sleep(0.05)
 
         if not self.isActive:
-            logger.warning("Timeout waiting for log streamer activation")
+            if first_attempt_ok == [False]:
+                logger.error(f"Log streamer could not connect: {self.last_error}")
+            else:
+                logger.warning("Timeout waiting for log streamer activation")
 
         return self.isActive
 
@@ -301,41 +319,39 @@ class logstreamer:
             await asyncio.sleep(0.1)
 
     def close(self):
-        """Close the log streamer connection with proper task cleanup."""
+        """Close the log streamer connection, stop its event loop and close the loop. Idempotent."""
+        import threading
         logger.info("Closing log streamer...")
 
-        # Signal shutdown
         self._running = False
         self.isActive = False
+        loop = self._event_loop
+        if loop.is_closed():
+            return
 
-        # First, cancel regular tasks
-        if self._task:
-            self._event_loop.call_soon_threadsafe(self._task.cancel)
-        if self._reconnect_task:
-            self._event_loop.call_soon_threadsafe(self._reconnect_task.cancel)
-
-        # Create and run a cleanup task
-        cleanup_future = asyncio.run_coroutine_threadsafe(
-            self._cleanup_all_tasks(),
-            self._event_loop
-        )
-
-        try:
-            # Give it a short time to complete
-            cleanup_future.result(timeout=1.0)
-        except concurrent.futures.TimeoutError:
-            logger.warning("Cleanup tasks timed out")
-        except Exception as e:
-            logger.error(f"Error during task cleanup: {e}")
-
-        # Stop the event loop
-        try:
-            self._event_loop.call_soon_threadsafe(self._event_loop.stop)
-            # Wait briefly for the event loop to stop
-            import time
-            time.sleep(0.2)
-        except Exception as e:
-            logger.error(f"Error stopping event loop: {e}")
+        if loop.is_running():
+            if self._task:
+                loop.call_soon_threadsafe(self._task.cancel)
+            if self._reconnect_task:
+                loop.call_soon_threadsafe(self._reconnect_task.cancel)
+            cleanup_future = asyncio.run_coroutine_threadsafe(self._cleanup_all_tasks(), loop)
+            try:
+                cleanup_future.result(timeout=2.0)
+            except concurrent.futures.TimeoutError:
+                logger.warning("Cleanup tasks timed out")
+            except Exception as e:
+                logger.error(f"Error during task cleanup: {e}")
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass
+            t = self._thread
+            if t is not None and t is not threading.current_thread():
+                t.join(timeout=3.0)
+                if t.is_alive():
+                    logger.warning("Log streamer event loop thread did not stop")
+        elif self._thread is None or not self._thread.is_alive():
+            _dataplane._shutdown_loop(loop)
 
         logger.info("Log streamer closed")
 

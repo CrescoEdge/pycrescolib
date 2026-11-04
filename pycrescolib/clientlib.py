@@ -1,7 +1,6 @@
 """
 Client library for Cresco framework interaction with improved resource management.
 """
-import ssl
 import logging
 import asyncio
 import time
@@ -18,6 +17,7 @@ from .globalcontroller import globalcontroller
 from .logstreamer import logstreamer
 from .messaging import messaging_sync as messaging
 from .stunnel import stunnel
+from .tls import Credentials, TrustSettings
 from .wc_interface import ws_interface
 
 # Setup logging
@@ -27,28 +27,47 @@ logger = logging.getLogger(__name__)
 class clientlib:
     """Client library for interacting with Cresco framework."""
 
-    def __init__(self, host: str, port: int, service_key: str, verify_ssl: bool = False):
+    def __init__(self, host: str, port: int, service_key: Optional[str] = None, verify_ssl: bool = True, *,
+                 ca_file: Optional[str] = None, fingerprint=None, check_hostname: bool = True,
+                 user: Optional[str] = None, password: Optional[str] = None):
         """Initialize the client library.
+
+        Every connection this client opens (the API socket, dataplanes and log streams) verifies the wsapi
+        server certificate and sends the same credentials. See :mod:`pycrescolib.tls`.
 
         Args:
             host: Host address
             port: Port number
-            service_key: Service key for authentication
-            verify_ssl: Whether to verify SSL certificates
+            service_key: the wsapi service key (an admin of the agent's tenant). Omit it when giving
+                ``user`` and ``password``.
+            verify_ssl: verify the server certificate (default True). False turns verification off: the
+                credentials then go to whoever answers, and every connection logs a WARNING.
+            ca_file: PEM file of trusted certificates (the wsapi writes its own certificate to ws.crt.pem).
+            fingerprint: pinned SHA-256 or SHA-384 fingerprint of the wsapi certificate (from ws.fingerprint),
+                or a list / comma-separated string of them.
+            check_hostname: with ``ca_file`` or the system trust store, check the host name (default True).
+            user: per-user credential name (from the wsapi credential store).
+            password: per-user credential password.
+
+        Without ``ca_file`` and ``fingerprint`` the environment variables CRESCO_TLS_FINGERPRINT and
+        CRESCO_TLS_CA_FILE apply, then the system trust store (and SSL_CERT_FILE).
+
+        Raises:
+            pycrescolib.tls.TLSConfigError: unusable trust settings
+            ValueError: missing or conflicting credentials
         """
         self.host = host
         self.port = port
         self.service_key = service_key
         self.verify_ssl = verify_ssl
+        self.tls = TrustSettings(verify=verify_ssl, ca_file=ca_file, fingerprint=fingerprint,
+                                 check_hostname=check_hostname)
+        self.credentials = Credentials(service_key=service_key, user=user, password=password)
         self._lock = threading.RLock()  # Reentrant lock for thread safety
 
         # Use dictionaries to track resources with identifiers
         self._dataplanes = {}  # stream_name -> dataplane instance
         self._logstreamers = {}  # optional_name -> logstreamer instance
-
-        # Configure SSL handling globally if needed
-        if not verify_ssl:
-            self._configure_global_ssl()
 
         # Create WebSocket interface first - it will create its own event loop
         self.ws_interface = ws_interface()
@@ -61,18 +80,12 @@ class clientlib:
         self.globalcontroller = globalcontroller(self.messaging)
         self.stunnel = stunnel(self.messaging, self.globalcontroller, self.agents)
 
-        logger.info(f"Clientlib initialized for {host}:{port}")
+        logger.info(f"Clientlib initialized for {host}:{port} (TLS trust: {self.tls.describe()})")
 
-    def _configure_global_ssl(self):
-        """Configure global SSL settings when verification is disabled."""
-        try:
-            # Create unverified context
-            _unverified_context = ssl._create_unverified_context()
-            # Apply globally
-            ssl._create_default_https_context = lambda: _unverified_context
-            logger.warning("SSL certificate verification disabled globally")
-        except AttributeError:
-            logger.warning("Could not configure global SSL verification settings")
+    @property
+    def last_error(self) -> Optional[str]:
+        """Why the last connect() failed (certificate, credentials, network), or None."""
+        return self.ws_interface.last_error
 
     def connect(self) -> bool:
         """Connect to the WebSocket server.
@@ -88,7 +101,7 @@ class clientlib:
             ws_url = f'wss://{self.host}:{self.port}/api/apisocket'
 
             # Connect using the WebSocket interface
-            connection_result = self.ws_interface.connect(ws_url, self.service_key, self.verify_ssl)
+            connection_result = self.ws_interface.connect(ws_url, tls=self.tls, credentials=self.credentials)
 
             if connection_result:
                 # Sleep briefly to ensure connection is fully established
@@ -139,8 +152,8 @@ class clientlib:
                 return self._dataplanes[stream_name]
 
             # Create new dataplane
-            dp = dataplane(self.host, self.port, stream_name, self.service_key,
-                           callback, binary_callback)
+            dp = dataplane(self.host, self.port, stream_name, None, callback, binary_callback,
+                           tls=self.tls, credentials=self.credentials)
             logger.debug(f"Created dataplane for stream: {stream_name}")
 
             # Store with stream name as key
@@ -194,7 +207,7 @@ class clientlib:
                 return self._logstreamers[name]
 
             # Create new logstreamer
-            ls = logstreamer(self.host, self.port, self.service_key, callback)
+            ls = logstreamer(self.host, self.port, None, callback, tls=self.tls, credentials=self.credentials)
             logger.debug(f"Created logstreamer: {name}")
 
             # Store with name as key
