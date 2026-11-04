@@ -259,7 +259,7 @@ The user name and password go as HTTP Basic inside TLS. wsapi answers 401 for a 
 another tenant, and 429 after repeated failures from one address. After such a refusal (or an untrusted certificate)
 a dataplane or log stream retries once a minute, not every few seconds, so it does not lock out its host.
 
-**Upgrading from 1.3.2 or earlier: what to set.** Since 1.3.3 every connection is verified by default, dataplanes and
+**Upgrading from 1.3.2 or earlier: what to set.** Since 1.4.0 every connection is verified by default, dataplanes and
 log streams included (they never verified before), so a client that names no trust stops connecting to a self-signed
 wsapi until it does. Nothing is sent to the server in the meantime; `last_error` says what to set.
 
@@ -276,7 +276,7 @@ wsapi until it does. Nothing is sent to the server in the meantime; `last_error`
   a pin.
 - **Code that relied on 1.3.2 turning off HTTPS verification for the whole process** (any `urllib`/`requests` call
   after creating a client with `verify_ssl=False`) now verifies; give those calls their own trust.
-- PyPI: this is version **1.3.3**.
+- PyPI: this is version **1.4.0** (a minor version, not 1.3.3, because the default changed incompatibly); it is published after the merge to main.
 
 ## Dataplane messages and verified file downloads
 
