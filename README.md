@@ -220,8 +220,8 @@ All take `(is_rpc, message_event_type, message_payload, ...)` and return the rep
 
 ## Security: TLS trust and credentials
 
-Every connection the client opens (the API socket, every dataplane and every log stream) uses the same trust setting
-and the same credentials. With a trust setting, the wsapi server certificate is verified before anything is sent.
+Every connection the client opens (the API socket, every dataplane and every log stream) verifies the wsapi server
+certificate before it sends anything, and authenticates with the same credentials.
 
 **Trusting the wsapi certificate.** wsapi makes its own certificate and publishes it in its plugin data directory on
 the agent (`<agent data>/plugin-data/<wsapi plugin id>/`): `ws.fingerprint` holds its SHA-384 and SHA-256
@@ -235,8 +235,7 @@ client = clientlib(host, 8282, key, ca_file="/path/to/ws.crt.pem")    # or trust
 or set `CRESCO_TLS_FINGERPRINT` or `CRESCO_TLS_CA_FILE` in the environment and change no code. Several pins (a list or a
 comma-separated string) allow a certificate rotation. With `ca_file` the host name is checked (wsapi's certificate
 names `localhost`, the agent's host names and addresses and `wsapi_tls_san`); pass `check_hostname=False` to skip
-that. `verify_ssl=True` with neither uses the system trust store (and `SSL_CERT_FILE`), which does not trust a
-self-signed wsapi.
+that. With neither, the system trust store (and `SSL_CERT_FILE`) applies, which does not trust a self-signed wsapi.
 
 A server that does not match gets nothing: no service key, no password. `connect()` returns False, `client.last_error`
 says why (`wsapi certificate mismatch for host:port: the pinned fingerprint ... does not match the certificate the
@@ -248,9 +247,6 @@ with `.status`), `TLSConfigError`.
 way logs a WARNING. It cannot be combined with `ca_file` or `fingerprint`. (It no longer turns off HTTPS verification
 for the whole Python process, as 1.3.2 and earlier did.)
 
-A client that names no trust setting at all (no `verify_ssl`, `ca_file` or `fingerprint`, and no `CRESCO_TLS_*`
-variable) is, for now, not verified, as in 1.3.2 (`pycrescolib.tls.VERIFY_BY_DEFAULT` is False). Set a trust setting
-now: verification will become the default.
 
 **Credentials.** A per-user credential (created on the agent with wsapi's `CredentialTool`) or the legacy service key:
 
@@ -260,7 +256,27 @@ client = clientlib(host, 8282, "service-key", fingerprint=fp)
 ```
 
 The user name and password go as HTTP Basic inside TLS. wsapi answers 401 for a bad credential, 403 for a user of
-another tenant, and 429 after repeated failures from one address.
+another tenant, and 429 after repeated failures from one address. After such a refusal (or an untrusted certificate)
+a dataplane or log stream retries once a minute, not every few seconds, so it does not lock out its host.
+
+**Upgrading from 1.3.2 or earlier: what to set.** Since 1.3.3 every connection is verified by default, dataplanes and
+log streams included (they never verified before), so a client that names no trust stops connecting to a self-signed
+wsapi until it does. Nothing is sent to the server in the meantime; `last_error` says what to set.
+
+1. On the agent, read the wsapi certificate's fingerprint:
+   `cat <agent data>/plugin-data/<wsapi plugin id>/ws.fingerprint` (or the `wsapi TLS certificate fingerprint` line
+   of the agent log).
+2. On every client host, either `export CRESCO_TLS_FINGERPRINT=sha384:...` (no code change), or pass
+   `fingerprint="sha384:..."` to `clientlib(...)`, or copy `ws.crt.pem` and use `ca_file=` / `CRESCO_TLS_CA_FILE`.
+
+- **GaiaKeep tooling** (`CrescoTransport(host, port, service_key)`, the `gfs` CLI, the eval scripts, the dashboard):
+  step 2 only, with the environment variable. Its `unverified_dataplane=True` workaround is no longer needed: dataplanes
+  are verified like the control connection.
+- **Code that passed `verify_ssl=False`** keeps working, unverified, with a WARNING on every connection; replace it with
+  a pin.
+- **Code that relied on 1.3.2 turning off HTTPS verification for the whole process** (any `urllib`/`requests` call
+  after creating a client with `verify_ssl=False`) now verifies; give those calls their own trust.
+- PyPI: this is version **1.3.3**.
 
 ## Dataplane messages and verified file downloads
 
