@@ -8,6 +8,7 @@ import time
 import logging
 import asyncio
 import base64
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Callable, Union, BinaryIO
 import websockets
 import backoff
@@ -29,6 +30,73 @@ STATUS_ACTIVE = 10
 #: wsapi activation status: the broker refused the subscription (another tenant's stream, or a stream bound to
 #: another recipient with cresco_to); the stream stays open for sending
 STATUS_SUBSCRIPTION_REFUSED = 40
+
+
+@dataclass(frozen=True)
+class Envelope:
+    """A dataplane message with its verified writer (a stream opened with ``envelope=True``, see wsapi's README).
+
+    ``writer`` is ``api:<tenant>/<user>`` when an API client wrote it through wsapi, else the bundle or controller that
+    published it as its controller stamped it (for example the executor plugin for a process's ``execution_log``);
+    None when the message carries no stamp, or the frame was not an envelope (``kind == "raw"``): treat it as unverified.
+    """
+    kind: str                                   # "text", "map", "transfer_end", "bytes", or "raw"
+    writer: Optional[str]
+    writer_roles: Optional[str]
+    writer_tenant: Optional[str]
+    properties: Dict[str, Any] = field(default_factory=dict)
+    text: Optional[str] = None
+    map: Optional[Dict[str, Any]] = None
+    data: Optional[bytes] = None
+
+    @property
+    def from_api_user(self) -> bool:
+        """True when an API client (a person or tool through wsapi), not infrastructure, wrote it."""
+        return bool(self.writer) and self.writer.startswith("api:")
+
+
+def _envelope(fields: Dict[str, Any], **body) -> Envelope:
+    props = fields.get("properties")
+    return Envelope(kind=str(fields.get("kind")), writer=fields.get("writer"), writer_roles=fields.get("writer_roles"),
+                    writer_tenant=fields.get("writer_tenant"), properties=props if isinstance(props, dict) else {}, **body)
+
+
+def parse_envelope_text(frame: str) -> Envelope:
+    """An envelope text frame (text, map or transfer_end); a frame that is not one is ``kind="raw"`` with no writer."""
+    try:
+        e = json.loads(frame)
+    except (TypeError, ValueError):
+        e = None
+    if not isinstance(e, dict) or e.get("kind") not in ("text", "map", "transfer_end"):
+        return Envelope(kind="raw", writer=None, writer_roles=None, writer_tenant=None, text=frame)
+    m = e.get("map")
+    return _envelope(e, text=e.get("text"), map=m if isinstance(m, dict) else None)
+
+
+def parse_envelope_bytes(frame: bytes) -> Envelope:
+    """An envelope binary frame: 4-byte big-endian header length, JSON header, payload."""
+    if len(frame) >= 4:
+        n = int.from_bytes(frame[:4], "big")
+        if 0 < n <= len(frame) - 4:
+            try:
+                header = json.loads(frame[4:4 + n].decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                header = None
+            if isinstance(header, dict) and header.get("kind") == "bytes":
+                return _envelope(header, data=bytes(frame[4 + n:]))
+    return Envelope(kind="raw", writer=None, writer_roles=None, writer_tenant=None, data=bytes(frame))
+
+
+def with_envelope(stream_name: str) -> str:
+    """A JSON stream config that asks wsapi for envelope frames (ValueError for a selector, which cannot carry it)."""
+    try:
+        cfg = json.loads(stream_name)
+    except (TypeError, ValueError):
+        cfg = None
+    if not isinstance(cfg, dict):
+        raise ValueError("envelope frames need a JSON stream config ({\"ident_key\": ..., \"ident_id\": ...}), not a selector")
+    cfg["envelope"] = "true"
+    return json.dumps(cfg)
 
 
 def stdin_stream_refusal(stream_name: str) -> Optional[str]:
@@ -81,6 +149,12 @@ class dataplane:
         refusal = stdin_stream_refusal(stream_name)
         if refusal is not None:
             raise ValueError(refusal)
+        try:
+            cfg = json.loads(stream_name)
+        except (TypeError, ValueError):
+            cfg = None
+        # envelope frames: callbacks receive Envelope objects (with the verified writer), text and binary alike
+        self.envelope = isinstance(cfg, dict) and str(cfg.get("envelope", "")).lower() == "true"
         self.host = host
         self.port = port
         self.stream_name = stream_name
@@ -151,6 +225,14 @@ class dataplane:
                             except json.JSONDecodeError:
                                 logger.error(f"Invalid JSON in activation message")
                         # Handle regular messages
+                        elif self.envelope:
+                            env = parse_envelope_bytes(message) if isinstance(message, bytes) else parse_envelope_text(message)
+                            target = self.binary_callback if (env.data is not None and self.binary_callback) else self.callback
+                            if target:
+                                try:
+                                    await asyncio.get_event_loop().run_in_executor(None, target, env)
+                                except Exception as e:
+                                    logger.error(f"Error in envelope callback: {e}")
                         else:
                             if isinstance(message, bytes):
                                 # Binary message
