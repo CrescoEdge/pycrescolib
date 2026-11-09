@@ -85,6 +85,37 @@ def test_a_pinned_certificate_connects(server_cert, algo):
         assert srv.requests and srv.requests[0]["cresco_service_key"] == "sk-test"
 
 
+def test_the_pin_check_does_not_wait_for_a_server_that_never_closes(server_cert):
+    """The pin check's handshake sends nothing; a server that never answers its close (wsapi does not) must not delay
+    the connection that follows (it did by 2 s, on every pinned API, dataplane and log stream connection)."""
+    import socket
+    import ssl
+    import threading
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(server_cert.cert_pem, server_cert.key_pem)
+    lsock = socket.socket()
+    lsock.bind(("127.0.0.1", 0))
+    lsock.listen()
+    held = []
+
+    def serve():
+        conn, _ = lsock.accept()
+        held.append(ctx.wrap_socket(conn, server_side=True))       # the handshake, then nothing: never read, never closed
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    try:
+        t0 = time.monotonic()
+        der = asyncio.run(tls.fetch_server_certificate("127.0.0.1", lsock.getsockname()[1], 5.0))
+        took = time.monotonic() - t0
+        assert der == server_cert.der
+        assert took < 1.0, f"the pin check took {took:.2f} s"
+    finally:
+        t.join(5)
+        for c in held:
+            c.close()
+        lsock.close()
+
+
 def test_one_of_several_pins_is_enough(server_cert, other_cert):
     pins = [other_cert.fingerprint(), server_cert.fingerprint("sha384")]
     with WssServer(server_cert) as srv:

@@ -428,11 +428,10 @@ async def fetch_server_certificate(host: str, port: int, timeout: float = 8.0,
         sslobj = writer.get_extra_info("ssl_object")
         der = sslobj.getpeercert(binary_form=True) if sslobj is not None else None
     finally:
-        writer.close()
-        try:
-            await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
-        except Exception:
-            pass
+        # Nothing was sent: drop the connection at once. A graceful close waits for the server's close_notify, which a
+        # server that has seen no request may never send (wsapi does not), so every pinned connection (the API socket,
+        # each dataplane and log stream) waited out a 2 s timeout here before it was made.
+        writer.transport.abort()
     if not der:
         raise CertificateVerificationError(f"{host}:{port} presented no TLS certificate")
     return der
