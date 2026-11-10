@@ -336,7 +336,9 @@ wsapi until it does. Nothing is sent to the server in the meantime; `last_error`
   a pin.
 - **Code that relied on 1.3.2 turning off HTTPS verification for the whole process** (any `urllib`/`requests` call
   after creating a client with `verify_ssl=False`) now verifies; give those calls their own trust.
-- PyPI: this is version **1.4.0** (a minor version, not 1.3.3, because the default changed incompatibly); it is published after the merge to main.
+- PyPI: these defaults arrived in **1.4.0** (a minor version, not 1.3.3, because the default changed incompatibly). **1.4.1**
+  closes the pin check's certificate-only connection at once instead of waiting for the server to close it (up to 2 s on
+  every pinned connection).
 
 ## Dataplane messages and verified file downloads
 
