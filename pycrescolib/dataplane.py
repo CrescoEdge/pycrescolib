@@ -2,6 +2,8 @@
 Dataplane implementation for Cresco communications with binary data support.
 """
 import concurrent
+import concurrent.futures
+import enum
 import json
 import os
 import time
@@ -22,8 +24,51 @@ from .tls import (AuthenticationError, CertificateVerificationError, Credentials
 #: this address (it locks an address out after repeated failures, which stops every client on the host).
 PERMANENT_FAILURE_RETRY_S = 60.0
 
+#: How long one synchronous send may take (seconds) unless the stream or the call says otherwise;
+#: CRESCO_DATAPLANE_SEND_TIMEOUT overrides it. wsapi slows a sender down when the fabric cannot keep up, so a send can
+#: legitimately take a while: 5 s (the limit before 1.5.0) turned back-pressure into a reconnect.
+DEFAULT_SEND_TIMEOUT_S = 30.0
+
+#: The first wait before a stream whose handshake wsapi refused tries again; it doubles up to the maximum.
+HANDSHAKE_REFUSED_RETRY_S = 5.0
+HANDSHAKE_REFUSED_RETRY_MAX_S = 60.0
+
 # Setup logging
 logger = logging.getLogger(__name__)
+
+
+class SendResult(str, enum.Enum):
+    """What became of one dataplane send. True in a condition unless the data was lost (``if not dp.send(x): ...``).
+
+    ``last_send_error`` on the dataplane says why the last send was DROPPED or FAILED.
+    """
+    #: handed to the socket (wsapi takes it from there; this is not an acknowledgement from a receiver)
+    SENT = "sent"
+    #: a fragment of send_partial() that waits for the final one
+    PENDING = "pending"
+    #: nothing was written: the stream is not active (not connected yet, reconnecting, refused, closed)
+    DROPPED = "dropped"
+    #: the write raised or did not finish in time: the stream reconnects, and the receiver may have got none of it
+    FAILED = "failed"
+
+    def __bool__(self) -> bool:
+        return self in (SendResult.SENT, SendResult.PENDING)
+
+    def __str__(self) -> str:
+        return self.value
+
+
+def _default_send_timeout() -> float:
+    raw = os.environ.get("CRESCO_DATAPLANE_SEND_TIMEOUT")
+    if raw is None or not raw.strip():
+        return DEFAULT_SEND_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"CRESCO_DATAPLANE_SEND_TIMEOUT must be a number of seconds, not {raw!r}") from None
+    if value <= 0:
+        raise ValueError(f"CRESCO_DATAPLANE_SEND_TIMEOUT must be positive, not {raw!r}")
+    return value
 
 #: wsapi activation status: the listener is active
 STATUS_ACTIVE = 10
@@ -138,14 +183,20 @@ class dataplane:
     def __init__(self, host: str, port: int, stream_name: str, service_key: Optional[str] = None,
                  callback: Optional[Callable] = None, binary_callback: Optional[Callable] = None,
                  refused_callback: Optional[Callable[[str], None]] = None, *,
-                 tls: Optional[TrustSettings] = None, credentials: Optional[Credentials] = None):
+                 tls: Optional[TrustSettings] = None, credentials: Optional[Credentials] = None,
+                 send_timeout: Optional[float] = None):
         """A dataplane stream. Prefer :meth:`pycrescolib.clientlib.clientlib.get_dataplane`, which passes the
         client's trust settings and credentials.
 
         Args:
             tls: how the server certificate is verified (default: verified, see :mod:`pycrescolib.tls`)
             credentials: what the stream authenticates with (default: ``service_key``)
+            send_timeout: how long one synchronous send may take, in seconds (default: CRESCO_DATAPLANE_SEND_TIMEOUT,
+                else 30). A send that does not finish in time is FAILED and the stream reconnects.
         """
+        if send_timeout is not None and send_timeout <= 0:
+            raise ValueError(f"send_timeout must be positive, not {send_timeout!r}")
+        self.send_timeout = float(send_timeout) if send_timeout is not None else _default_send_timeout()
         refusal = stdin_stream_refusal(stream_name)
         if refusal is not None:
             raise ValueError(refusal)
@@ -178,8 +229,14 @@ class dataplane:
         self._event_loop = asyncio.new_event_loop()
         self._thread = None
         self._partial_fragments = []  # accumulates send_partial() fragments until complete=True
+        self._partial_broken = False  # a fragment of the message being built was not taken: drop the rest of it
+        self.last_send_error = None  # why the last send was DROPPED or FAILED, or None after one that was SENT
         self.subscription_refused = None  # the broker's reason, when it refused this stream's subscription
-        # called with the broker's reason on every refusal, the first connect and every reconnect alike
+        self.handshake_refused = None  # wsapi's reason, when it refused this stream's handshake (status 9 or 90)
+        self._handshake_refusals = 0  # in a row: the wait before the next attempt doubles with each
+        self._refused_retry_at = None  # monotonic time before which a refused stream does not try again
+        # called with the reason on every refusal (of the subscription or of the handshake), the first connect and
+        # every reconnect alike
         self.refused_callback = refused_callback
 
     def is_active(self) -> bool:
@@ -219,6 +276,14 @@ class dataplane:
                                 # Activation message should be text/JSON
                                 if isinstance(message, str):
                                     self._on_activation(json.loads(message))
+                                    if self.handshake_refused is not None:
+                                        # nothing more comes on this socket, and it holds one of the user's
+                                        # connections at wsapi: close it; the monitor tries again later
+                                        refused_ws, self.ws = self.ws, None
+                                        try:
+                                            await refused_ws.close()
+                                        except Exception:
+                                            pass
                                 else:
                                     # Not expected to get binary for activation
                                     logger.warning("Received binary data for activation message")
@@ -279,6 +344,11 @@ class dataplane:
                 logger.error(f"Error in dataplane message handler: {e}")
                 await asyncio.sleep(1)
 
+    def _handshake_retry_pending(self) -> bool:
+        """True while a stream whose handshake wsapi refused waits before it tries again."""
+        at = self._refused_retry_at
+        return at is not None and time.monotonic() < at
+
     def _permanent_failure_due(self) -> bool:
         """True while the last failure (credentials, rate limit, certificate) is younger than PERMANENT_FAILURE_RETRY_S."""
         at = self._permanent_failure_at
@@ -299,6 +369,10 @@ class dataplane:
                 if not self.isActive or self.ws is None:
                     if self._permanent_failure_due():
                         await asyncio.sleep(5)
+                        continue
+                    if self._handshake_retry_pending():
+                        # refused, not lost: before 1.5.0 this reconnected every 5 s for ever, each attempt refused
+                        await asyncio.sleep(1)
                         continue
                     logger.warning(f"Dataplane connection lost for {self.stream_name}, attempting to reconnect...")
                     self.isActive = False
@@ -338,8 +412,9 @@ class dataplane:
             self.ws = await connect_websocket(
                 ws_url, self.host, self.port, self._tls, self._credentials,
                 compression=None,
-                # The websockets default (1 MiB) silently capped dataplane messages; the server accepts 1 GiB.
-                # Bounded, not unlimited: each connection may buffer this much per message.
+                # The websockets default (1 MiB) silently capped dataplane messages; wsapi's own limit for one
+                # message is 64 MiB (wsapi_dataplane_max_message_bytes). Bounded, not unlimited: each connection
+                # may buffer this much per message.
                 max_size=int(os.environ.get("CRESCO_DATAPLANE_MAX_MESSAGE", 64 * 1024 * 1024)),
                 write_limit=4 * 1024 * 1024
             )
@@ -351,6 +426,8 @@ class dataplane:
             self.message_count = 0
             self.isActive = False
             self.subscription_refused = None
+            self.handshake_refused = None
+            self._refused_retry_at = None
 
             # Send the stream handshake as a JSON config map. The wsapi DataPlaneWsHandler only
             # populates StreamInfo.identKey/identId (and builds a valid JMS selector) when the
@@ -407,8 +484,10 @@ class dataplane:
         """Connect to the dataplane stream.
 
         Returns:
-            True once the stream is active. False if it did not activate within 5 s or the connection failed
-            (``last_error`` says why: an untrusted certificate, refused credentials, the network).
+            True once the stream is active. False if it did not activate within 5 s, the connection failed or wsapi
+            refused the handshake (``last_error`` says why: an untrusted certificate, refused credentials, the
+            network, wsapi's reason for the refusal; ``handshake_refused`` holds that reason alone). A refused
+            stream answers at once and tries again by itself after 5, 10, 20, 40 and then every 60 s.
 
         Raises:
             DataplaneSubscriptionRefused: a receiver whose subscription the broker refused
@@ -456,11 +535,15 @@ class dataplane:
         while not self.isActive and time.time() < deadline:
             if first_attempt_done.is_set() and first_attempt_ok == [False]:
                 break
+            if self.handshake_refused is not None:
+                break                                   # wsapi answered: waiting longer changes nothing
             time.sleep(0.05)
 
         if not self.isActive:
             if first_attempt_ok == [False]:
                 logger.error(f"Dataplane {self.stream_name} could not connect: {self.last_error}")
+            elif self.handshake_refused is not None:
+                logger.error(f"Dataplane {self.stream_name} is not active: {self.last_error}")
             else:
                 logger.warning(f"Timeout waiting for dataplane {self.stream_name} activation")
 
@@ -489,9 +572,15 @@ class dataplane:
 
     def _on_activation(self, status: Dict[str, Any]) -> None:
         """Apply the wsapi activation reply (the first frame of every session)."""
-        code = int(status.get('status_code', 0))
+        raw = status.get('status_code', 0) if isinstance(status, dict) else None
+        try:
+            code = int(raw)
+        except (TypeError, ValueError):
+            self._on_handshake_refused(raw, "an activation reply this client cannot read")
+            return
         if code == STATUS_ACTIVE:
             self.isActive = True
+            self._handshake_refusals = 0
             logger.info(f"Dataplane {self.stream_name} activated")
         elif code == STATUS_SUBSCRIPTION_REFUSED:
             self.subscription_refused = status.get('status_desc', 'subscription refused')
@@ -507,6 +596,26 @@ class dataplane:
             else:
                 self.isActive = True  # a sender can still send
                 logger.warning(f"Dataplane {self.stream_name}: {self.subscription_refused} (open for sending only)")
+        else:
+            # 9: wsapi refused the handshake (the caller's role or tenant, a stream it does not open to this caller) or
+            # could not start the listener; 90: it failed while doing so. Before 1.5.0 this was not read at all: the
+            # stream looked like one that timed out, and reconnected every 5 s for ever.
+            self._on_handshake_refused(code, status.get('status_desc'))
+
+    def _on_handshake_refused(self, code, reason) -> None:
+        """wsapi answered the handshake with anything but active: not active, the reason kept, the next attempt later."""
+        self.isActive = False
+        self._handshake_refusals += 1
+        self.handshake_refused = str(reason) if reason else f"status {code}"
+        self.last_error = f"wsapi refused the dataplane handshake (status {code}): {self.handshake_refused}"
+        delay = min(HANDSHAKE_REFUSED_RETRY_MAX_S, HANDSHAKE_REFUSED_RETRY_S * 2 ** (self._handshake_refusals - 1))
+        self._refused_retry_at = time.monotonic() + delay
+        logger.warning(f"Dataplane {self.stream_name}: {self.last_error}; next attempt in {delay:g} s")
+        if self.refused_callback:
+            try:
+                self.refused_callback(self.handshake_refused)
+            except Exception as e:
+                logger.error(f"Error in refused_callback: {e}")
 
     def _is_receiver(self) -> bool:
         return bool(self.callback or self.binary_callback)
@@ -526,15 +635,34 @@ class dataplane:
         while not self.isActive and self._running:
             await asyncio.sleep(0.1)
 
-    async def send_async(self, data: Union[str, bytes]):
+    def _not_sent(self, result: "SendResult", why: str) -> "SendResult":
+        """Record why a send was DROPPED or FAILED, and return the result."""
+        self.last_send_error = why
+        if result is SendResult.FAILED:
+            logger.error(f"Dataplane {self.stream_name}: send failed: {why}")
+        else:
+            logger.warning(f"Dataplane {self.stream_name}: not sent: {why}")
+        return result
+
+    def _why_not_active(self) -> str:
+        if self.handshake_refused is not None:
+            return f"the stream is not active: wsapi refused its handshake ({self.handshake_refused})"
+        if self.subscription_refused is not None and self._is_receiver():
+            return f"the stream is not active: its subscription was refused ({self.subscription_refused})"
+        return "the stream is not active (not connected, or reconnecting)"
+
+    async def send_async(self, data: Union[str, bytes]) -> "SendResult":
         """Send data asynchronously, supporting both text and binary.
 
         Args:
             data: Data to send, can be string or bytes
+
+        Returns:
+            SendResult.SENT, DROPPED (the stream is not active: nothing was written) or FAILED (the write raised:
+            the stream reconnects). ``last_send_error`` says why.
         """
         if not self.isActive:
-            logger.warning("Dataplane not active, cannot send data")
-            return
+            return self._not_sent(SendResult.DROPPED, self._why_not_active())
 
         try:
             async with self._lock:
@@ -548,9 +676,30 @@ class dataplane:
                     logger.debug(f"Sent binary data to dataplane: {len(data)} bytes")
                 else:
                     logger.debug(f"Sent text data to dataplane: {data[:100]}...")
+            self.last_send_error = None
+            return SendResult.SENT
         except Exception as e:
-            logger.error(f"Error sending data to dataplane: {e}")
             self.isActive = False
+            return self._not_sent(SendResult.FAILED, str(e) or type(e).__name__)
+
+    def _run_send(self, coro, timeout: Optional[float]) -> "SendResult":
+        """Run a send coroutine on the stream's loop from another thread and return its result."""
+        limit = self.send_timeout if timeout is None else timeout
+        loop = self._event_loop
+        if loop.is_closed() or not loop.is_running():
+            coro.close()
+            return self._not_sent(SendResult.DROPPED, "the stream is not connected")
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            return future.result(timeout=limit)
+        except concurrent.futures.TimeoutError:
+            # The frame may be half written, so the connection cannot carry another: the stream reconnects.
+            future.cancel()
+            self.isActive = False
+            return self._not_sent(SendResult.FAILED, f"not sent within {limit:g} s (send_timeout)")
+        except Exception as e:
+            self.isActive = False
+            return self._not_sent(SendResult.FAILED, str(e) or type(e).__name__)
 
     def get_metrics(self) -> dict:
         """B-2 unified metrics: client-side dataplane counters for this stream connection.
@@ -567,25 +716,21 @@ class dataplane:
             'active': self.isActive,
         }
 
-    def send(self, data: Union[str, bytes]):
+    def send(self, data: Union[str, bytes], timeout: Optional[float] = None) -> "SendResult":
         """Send data synchronously, supporting both text and binary.
 
         Args:
             data: Data to send, can be string or bytes
+            timeout: seconds this send may take (default: the stream's ``send_timeout``)
+
+        Returns:
+            SendResult.SENT, DROPPED (the stream is not active: nothing was written) or FAILED (the write raised or
+            did not finish in time: the stream reconnects). True in a condition only when sent; ``last_send_error``
+            says why not. Before 1.5.0 this returned None in all three cases.
         """
         if not self.isActive:
-            logger.warning("Dataplane not active, cannot send data")
-            return
-
-        # Use event loop to send data
-        future = asyncio.run_coroutine_threadsafe(self.send_async(data), self._event_loop)
-
-        try:
-            # Wait for result with timeout
-            future.result(timeout=5)
-        except Exception as e:
-            logger.error(f"Error sending data to dataplane: {e}")
-            self.isActive = False
+            return self._not_sent(SendResult.DROPPED, self._why_not_active())
+        return self._run_send(self.send_async(data), timeout)
 
     async def send_binary_async(self, data: bytes):
         """Send binary data asynchronously.
@@ -595,32 +740,42 @@ class dataplane:
         """
         if not isinstance(data, bytes):
             raise TypeError("Data must be bytes for send_binary_async")
-        await self.send_async(data)
+        return await self.send_async(data)
 
-    def send_binary(self, data: bytes):
+    def send_binary(self, data: bytes, timeout: Optional[float] = None) -> "SendResult":
         """Send binary data synchronously.
 
         Args:
             data: Binary data to send
+            timeout: seconds this send may take (default: the stream's ``send_timeout``)
+
+        Returns:
+            as :meth:`send`
         """
         if not isinstance(data, bytes):
             raise TypeError("Data must be bytes for send_binary")
-        self.send(data)
+        return self.send(data, timeout)
 
-    def send_binary_file(self, file_path: str):
+    def send_binary_file(self, file_path: str, timeout: Optional[float] = None) -> "SendResult":
         """Read and send a binary file.
 
         Args:
             file_path: Path to the binary file
+            timeout: seconds this send may take (default: the stream's ``send_timeout``)
+
+        Returns:
+            as :meth:`send` (a file that cannot be read raises)
         """
         try:
             with open(file_path, 'rb') as f:
                 data = f.read()
-            self.send_binary(data)
-            logger.info(f"Sent binary file {file_path} ({len(data)} bytes)")
         except Exception as e:
-            logger.error(f"Error sending binary file {file_path}: {e}")
+            logger.error(f"Error reading binary file {file_path}: {e}")
             raise
+        result = self.send_binary(data, timeout)
+        if result:
+            logger.info(f"Sent binary file {file_path} ({len(data)} bytes)")
+        return result
 
     async def send_partial_async(self, data: bytes, complete: bool):
         """Send a binary payload as a fragmented WebSocket message asynchronously.
@@ -635,23 +790,43 @@ class dataplane:
         """
         if not isinstance(data, (bytes, bytearray)):
             raise TypeError("Data must be bytes for send_partial_async")
-        if not self.isActive:
-            logger.warning("Dataplane not active, cannot send data")
-            return
+        if self._partial_broken or not self.isActive:
+            return self._drop_partial(complete)
 
         try:
             async with self._lock:
                 self._partial_fragments.append(bytes(data))
-                if complete:
-                    fragments = self._partial_fragments
-                    self._partial_fragments = []
-                    await self.ws.send(fragments)
-                    logger.debug(f"Sent fragmented binary message: {len(fragments)} fragment(s)")
+                if not complete:
+                    return SendResult.PENDING
+                fragments = self._partial_fragments
+                self._partial_fragments = []
+                await self.ws.send(fragments)
+                try:
+                    self.bytes_sent += sum(len(f) for f in fragments)
+                    self.messages_sent += 1
+                except Exception:
+                    pass
+                logger.debug(f"Sent fragmented binary message: {len(fragments)} fragment(s)")
+            self.last_send_error = None
+            return SendResult.SENT
         except Exception as e:
-            logger.error(f"Error sending partial data to dataplane: {e}")
             self.isActive = False
+            self._partial_fragments = []
+            self._partial_broken = not complete
+            return self._not_sent(SendResult.FAILED, str(e) or type(e).__name__)
 
-    def send_partial(self, data: bytes, complete: bool):
+    def _drop_partial(self, complete: bool) -> "SendResult":
+        """A fragment that is not taken drops its whole message: the fragments before it, and those after it up to the
+        final one. Before 1.5.0 the earlier fragments stayed buffered and went out later, glued to the next fragments
+        the stream accepted: a message with a hole in it."""
+        broken_before = self._partial_broken
+        self._partial_fragments = []
+        self._partial_broken = not complete             # the final fragment ends the dropped message
+        return self._not_sent(SendResult.DROPPED,
+                              "an earlier fragment of this message was not sent" if broken_before
+                              else self._why_not_active())
+
+    def send_partial(self, data: bytes, complete: bool, timeout: Optional[float] = None) -> "SendResult":
         """Send a binary payload as a fragmented WebSocket message synchronously.
 
         Each call appends a fragment; when complete is True the accumulated fragments are
@@ -661,17 +836,24 @@ class dataplane:
         Args:
             data: Binary fragment to append
             complete: True when this is the final fragment (triggers the send)
-        """
-        if not self.isActive:
-            logger.warning("Dataplane not active, cannot send data")
-            return
+            timeout: seconds this call may take (default: the stream's ``send_timeout``)
 
-        future = asyncio.run_coroutine_threadsafe(self.send_partial_async(data, complete), self._event_loop)
-        try:
-            future.result(timeout=5)
-        except Exception as e:
-            logger.error(f"Error sending partial data to dataplane: {e}")
-            self.isActive = False
+        Returns:
+            SendResult.PENDING for a fragment that waits for the final one, SENT when the final fragment sent the
+            message, DROPPED or FAILED when the message is lost: every fragment of a message that lost one is
+            DROPPED, up to and including its final fragment, so a message never goes out with a hole in it.
+        """
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("Data must be bytes for send_partial")
+        loop = self._event_loop
+        if self._partial_broken or not self.isActive or loop.is_closed() or not loop.is_running():
+            return self._drop_partial(complete)
+        result = self._run_send(self.send_partial_async(data, complete), timeout)
+        if result is SendResult.FAILED:
+            # a timeout here never reached the coroutine's own handling
+            self._partial_fragments = []
+            self._partial_broken = not complete
+        return result
 
     def update_config(self, dst_region: str, dst_agent: str):
         """Update the dataplane stream configuration.
@@ -680,7 +862,7 @@ class dataplane:
             dst_region: Target region
             dst_agent: Target agent
         """
-        self.send(f'{dst_region},{dst_agent},Trace,default')
+        return self.send(f'{dst_region},{dst_agent},Trace,default')
 
     def close(self):
         """Close the dataplane connection, stop its event loop and close the loop.

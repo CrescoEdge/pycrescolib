@@ -6,6 +6,7 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 
 import logging
+import os
 import json
 import asyncio
 import time
@@ -20,6 +21,24 @@ from .tls import Credentials, TrustSettings, connect_websocket, peer_certificate
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+#: The largest message the API socket accepts when CRESCO_API_MAX_MESSAGE is not set: wsapi's default for this socket.
+DEFAULT_API_MAX_MESSAGE = 64 * 1024 * 1024
+
+
+def api_max_message() -> int:
+    """The largest message (bytes) the API socket accepts: CRESCO_API_MAX_MESSAGE, else 64 MiB."""
+    raw = os.environ.get("CRESCO_API_MAX_MESSAGE")
+    if raw is None or not raw.strip():
+        return DEFAULT_API_MAX_MESSAGE
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"CRESCO_API_MAX_MESSAGE must be a number of bytes, not {raw!r}") from None
+    if value <= 0:
+        raise ValueError(f"CRESCO_API_MAX_MESSAGE must be positive, not {raw!r}")
+    return value
 
 
 class ws_interface:
@@ -146,8 +165,19 @@ class ws_interface:
             surl = self.url.split('/')[2]
             host, port = surl.rsplit(':', 1)
             host = host.strip('[]')
+            # Close a socket this call replaces: overwriting it left the old connection, and the session wsapi keeps
+            # for it, open until the process ended.
+            previous, self.ws = self.ws, None
+            if previous is not None:
+                try:
+                    await asyncio.wait_for(previous.close(), timeout=2.0)
+                except Exception as e:
+                    logger.debug(f"closing the replaced API socket: {e}")
+            # websockets' default limit for one incoming message is 1 MiB: a larger reply (an inventory of a large
+            # fabric, a file chunk) closed the connection with 1009. wsapi's own limit for this socket is 64 MiB
+            # (wsapi_api_max_message_bytes), so that is the default here.
             self.ws = await connect_websocket(self.url, host, int(port), self._tls, self._credentials,
-                                              open_timeout=8.0)
+                                              open_timeout=8.0, max_size=api_max_message())
 
             # Identity is carried in three separate DN attributes so each stays within the X.509 64-char
             # limit: O=region, OU=agent, CN=plugin. Read from THIS connection's verified certificate (an
