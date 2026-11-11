@@ -58,6 +58,23 @@ ENV_CLIENT_KEY_PASSWORD = "CRESCO_TLS_CLIENT_KEY_PASSWORD"
 #: An explicit ``verify_ssl=False`` turns verification off and logs a WARNING on every connection.
 VERIFY_BY_DEFAULT = True
 
+_unverified_default_warned = False
+
+
+def _warn_unverified_default(url: str) -> None:
+    """Once per process: connections that name no trust setting are not verified, because code set VERIFY_BY_DEFAULT
+    to False. Before 1.5.0 that was silent."""
+    global _unverified_default_warned
+    if _unverified_default_warned:
+        return
+    _unverified_default_warned = True
+    logger.warning(
+        f"TLS certificate verification is OFF for {url} and every other connection that names no trust setting "
+        f"(pycrescolib.tls.VERIFY_BY_DEFAULT was set to False): the credentials go to whoever answers. Pin the wsapi "
+        f"certificate (fingerprint=..., CRESCO_TLS_FINGERPRINT) or trust it with ca_file=... (CRESCO_TLS_CA_FILE). "
+        f"This is logged once per process.")
+
+
 _HEX = re.compile(r"^[0-9a-f]+$")
 _DIGESTS = {64: "sha256", 96: "sha384"}
 
@@ -255,7 +272,7 @@ class TrustSettings:
                                    f"set, so the wsapi certificate is verified against it")
                     verify = None
                 fingerprint, ca_file = env_fp, env_ca
-        # an explicit opt-out warns on every connection; an unverified default (VERIFY_BY_DEFAULT=False) is silent
+        # an explicit opt-out warns on every connection; an unverified default (VERIFY_BY_DEFAULT=False) once per process
         self._unspecified = verify is None and not ca_file and not fingerprint
         if verify is None:
             verify = True if (ca_file or fingerprint) else VERIFY_BY_DEFAULT
@@ -323,6 +340,7 @@ class TrustSettings:
             CertificateVerificationError: the certificate could not be read for the pin check.
         """
         if self.mode == "insecure" and self._unspecified:
+            _warn_unverified_default(url)
             ctx = self._base_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE

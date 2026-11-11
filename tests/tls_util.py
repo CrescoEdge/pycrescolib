@@ -84,10 +84,17 @@ class WssServer:
 
     /api/apisocket echoes each frame; /api/dataplane and /api/logstreamer answer the stream activation
     ({"status_code": "10"}). ``reject_status`` answers every upgrade with that HTTP status instead.
+    ``dataplane_activation``: a callable (number of this dataplane connection, from 1) -> the activation reply (a dict)
+    for its handshake. ``api_reply``: a callable (frame) -> the reply to it on /api/apisocket.
+    ``paths`` records the path of every WebSocket opened.
     """
 
-    def __init__(self, cert: Cert, reject_status=None, chain_pem=None, client_ca=None):
+    def __init__(self, cert: Cert, reject_status=None, chain_pem=None, client_ca=None, dataplane_activation=None,
+                 api_reply=None):
         self.cert = cert
+        self.dataplane_activation = dataplane_activation
+        self.api_reply = api_reply
+        self.paths = []             # the path of every WebSocket opened, in order
         self.requests = []          # one dict of headers per HTTP upgrade request received
         self.client_certs = []      # the client certificate (DER) of each upgrade request, when one was presented
         self.reject_status = reject_status
@@ -128,6 +135,21 @@ class WssServer:
 
     async def _handler(self, ws):
         path = ws.request.path
+        self.paths.append(path)
+        if path == "/api/dataplane" and self.dataplane_activation is not None:
+            reply = self.dataplane_activation(self.paths.count("/api/dataplane"))
+            async for msg in ws:
+                await ws.send(json.dumps(reply))
+                if str(reply.get("status_code")) != "10":
+                    continue                            # as wsapi: not activated, the next frame is a new handshake
+                break
+            async for msg in ws:
+                await ws.send(msg)
+            return
+        if path == "/api/apisocket" and self.api_reply is not None:
+            async for msg in ws:
+                await ws.send(self.api_reply(msg))
+            return
         if path in ("/api/dataplane", "/api/logstreamer"):
             if path == "/api/logstreamer":
                 await ws.send(json.dumps({"status_code": "10", "status_desc": "Listener Active"}))

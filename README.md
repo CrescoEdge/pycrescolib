@@ -14,7 +14,7 @@ architecture and the [Java client](https://github.com/CrescoEdge/clientlib) for 
 > other with the same call. This README is identical to the Java client's, except for the install and
 > quick-start sections below.
 
-**Install:** `pip install pycrescolib` (Python 3.8+; depends on `websockets`, `cryptography`, `backoff`).
+**Install:** `pip install pycrescolib` (Python 3.9+; depends on `websockets` 14 or later, `cryptography`, `backoff`).
 From a source checkout use `pip install .`, and to build the distributions run `python -m build`.
 
 ## Quick start
@@ -224,12 +224,12 @@ client.executor.write_stdin("global-region", "agent-a", "job-1", "apple", close=
 
 | Method | Description |
 |---|---|
-| `send(message)` | Send a text message. |
-| `send_binary(data)` | Send a binary message. |
-| `send_binary_file(file_path)` | Read and send a binary file. |
-| `send_partial(data, complete)` | Send a payload as a fragmented message (flushed when `complete`). |
+| `send(message, timeout=None)` | Send a text message. Returns a `SendResult` (see below). |
+| `send_binary(data, timeout=None)` | Send a binary message. Returns a `SendResult`. |
+| `send_binary_file(file_path, timeout=None)` | Read and send a binary file. Returns a `SendResult`. |
+| `send_partial(data, complete, timeout=None)` | Send a payload as a fragmented message (flushed when `complete`). `PENDING` for a fragment that waits, `SENT` when the final one sent the message. |
 | `update_config(dst_region, dst_agent)` | Update the dataplane stream configuration. |
-| `connect()` | Open the stream. |
+| `connect()` | Open the stream: `True` once active. `False` with the reason in `last_error` when the connection failed or wsapi refused the handshake (then also in `handshake_refused`); raises `DataplaneSubscriptionRefused` for a receiver whose subscription was refused. |
 | `connected()` | Whether the stream is connected. |
 | `close()` | Close the stream. |
 | `get_metrics()` | Client-side counters for this stream (messages/bytes sent + received, active). |
@@ -339,6 +339,36 @@ wsapi until it does. Nothing is sent to the server in the meantime; `last_error`
 - PyPI: these defaults arrived in **1.4.0** (a minor version, not 1.3.3, because the default changed incompatibly). **1.4.1**
   closes the pin check's certificate-only connection at once instead of waiting for the server to close it (up to 2 s on
   every pinned connection).
+
+## What a send tells you, and what an error looks like (1.5.0)
+
+- **A dataplane send returns what became of the data**: `SendResult.SENT` (handed to the socket), `DROPPED` (the stream
+  was not active, nothing was written) or `FAILED` (the write raised or did not finish in time, and the stream
+  reconnects). It is true in a condition unless the data was lost, and `dp.last_send_error` says why:
+
+  ```python
+  if not dp.send_binary(chunk):
+      raise RuntimeError(f"chunk not sent: {dp.last_send_error}")
+  ```
+
+  Before 1.5.0 every send returned `None`, sent or not. `SENT` is not an acknowledgement from a receiver.
+- **How long a send may take** is the stream's `send_timeout` (seconds; `CRESCO_DATAPLANE_SEND_TIMEOUT`, default 30),
+  or `timeout=` on one call. wsapi slows a sender down when the fabric cannot keep up; the limit used to be a fixed 5 s,
+  after which the stream was torn down and reconnected.
+- **A fragmented message is sent whole or not at all.** When one `send_partial` fragment is not taken, every other
+  fragment of that message is `DROPPED` too, up to and including its final one. Before, the fragments already buffered
+  went out later, glued to the next ones the stream accepted.
+- **A refused handshake says so.** When wsapi refuses a stream (the caller's role or tenant, a stream it does not open
+  to this caller), `connect()` returns `False` at once, `dp.handshake_refused` holds wsapi's reason, the
+  `refused_callback` is called with it, and the stream tries again after 5, 10, 20, 40 and then every 60 s. Before, the
+  refusal looked like a timeout and the stream reconnected every 5 s for ever.
+- **`messaging` raises what went wrong.** `agent_msgevent`, `regional_agent_msgevent` and `regional_plugin_msgevent` now
+  raise `ConnectionError` (the socket is gone) and `TimeoutError` (no answer in time) like the `global_*` calls; they
+  used to return `{}`, which reads as "an empty answer".
+- **Replies larger than 1 MiB.** The API socket accepts messages up to 64 MiB (wsapi's own limit;
+  `CRESCO_API_MAX_MESSAGE` changes it). Before, a reply over 1 MiB closed the connection.
+- **Requirements.** Python 3.9 or later and `websockets` 14 or later: the code has used the 14 API since 1.4.0 while the
+  package still declared 10.
 
 ## Dataplane messages and verified file downloads
 

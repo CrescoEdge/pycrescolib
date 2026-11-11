@@ -697,6 +697,9 @@ class messaging_sync(messaging):
                         self._failed_connection = True
                         logger.error(f"Connection failure during async send: {e}")
                     return None
+            except (ConnectionError, TimeoutError):
+                # as the other wrappers: a dead socket or an unanswered RPC is an error for the caller, never {}
+                raise
             except Exception as e:
                 logger.error(f"Error in {message_type}: {e}")
                 self._failed_connection = True
